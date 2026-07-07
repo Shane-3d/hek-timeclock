@@ -1,0 +1,223 @@
+:root {
+  --black: #0d0d0d;
+  --panel: #171717;
+  --panel-2: #1f1f1f;
+  --gold: #c89b5c;
+  --gold-dim: #a97f43;
+  --line: #2c2c2c;
+  --text: #f3f0ea;
+  --muted: #9a938a;
+  --green: #3fae6a;
+  --red: #d15b52;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  background: var(--black);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.brand {
+  text-align: center;
+  padding: 28px 16px 8px;
+}
+.brand .hek {
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: 8px;
+  color: var(--gold);
+  line-height: 1;
+}
+.brand .sub {
+  margin-top: 6px;
+  font-size: 15px;
+  letter-spacing: 10px;
+  color: var(--text);
+  font-weight: 600;
+}
+.brand .inc {
+  font-size: 12px;
+  color: var(--gold-dim);
+  font-style: italic;
+  letter-spacing: 2px;
+}
+
+.wrap {
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px;
+}
+
+h1, h2 { font-weight: 700; }
+
+/* ---- PIN entry ---- */
+.pin-display {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin: 8px 0 20px;
+}
+.pin-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--gold-dim);
+  background: transparent;
+  transition: background 0.15s;
+}
+.pin-dot.filled { background: var(--gold); border-color: var(--gold); }
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 0;
+  font-size: 26px;
+  font-weight: 600;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.key:active { background: var(--gold); color: var(--black); }
+.key.wide { grid-column: span 1; }
+.key.ghost { background: transparent; border-color: transparent; }
+
+.status-title { text-align: center; margin: 4px 0 2px; }
+.status-title .name { color: var(--gold); }
+.status-sub { text-align: center; color: var(--muted); margin: 0 0 18px; }
+
+.btn {
+  display: block;
+  width: 100%;
+  padding: 18px;
+  font-size: 20px;
+  font-weight: 700;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+}
+.btn.in { background: var(--green); }
+.btn.out { background: var(--red); }
+.btn.gold { background: var(--gold); color: var(--black); }
+.btn.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font-size: 15px;
+  padding: 12px;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+.msg { text-align: center; min-height: 22px; margin: 14px 0 0; font-size: 15px; }
+.msg.err { color: var(--red); }
+.msg.ok { color: var(--green); }
+
+.big-clock {
+  text-align: center;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin: 6px 0 2px;
+}
+.big-date { text-align: center; color: var(--muted); margin-bottom: 18px; }
+
+.footer-link { text-align: center; margin-top: 22px; }
+.footer-link a { color: var(--gold-dim); font-size: 13px; text-decoration: none; }
+
+/* ---- Admin ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.topbar .logo { font-weight: 800; letter-spacing: 4px; color: var(--gold); font-size: 22px; }
+.topbar .logo small { color: var(--text); font-weight: 600; letter-spacing: 2px; font-size: 12px; }
+
+.admin-wrap { max-width: 1000px; margin: 0 auto; padding: 18px; }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+.tab {
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 600;
+}
+.tab.active { color: var(--black); background: var(--gold); border-color: var(--gold); }
+
+.section { display: none; }
+.section.active { display: block; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { color: var(--gold); font-weight: 600; }
+tr:hover td { background: var(--panel-2); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 12px; }
+.badge.on { background: rgba(63,174,106,.18); color: var(--green); }
+.badge.edited { background: rgba(200,155,92,.18); color: var(--gold); }
+
+input, select, textarea {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: inherit;
+}
+textarea { width: 100%; resize: vertical; }
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.field { display: flex; flex-direction: column; }
+.btn.sm { display: inline-block; width: auto; padding: 10px 16px; font-size: 14px; }
+.link-btn { background: none; border: none; color: var(--gold); cursor: pointer; font-size: 13px; padding: 2px 6px; }
+.link-btn.danger { color: var(--red); }
+
+.stat-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.stat {
+  flex: 1 1 140px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+}
+.stat .n { font-size: 30px; font-weight: 800; color: var(--gold); }
+.stat .l { color: var(--muted); font-size: 13px; }
+
+.modal-back {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7);
+  display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50;
+}
+.modal-back.open { display: flex; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; max-width: 420px; width: 100%; }
+.modal h3 { margin-top: 0; }
+.modal .row { margin-bottom: 12px; }

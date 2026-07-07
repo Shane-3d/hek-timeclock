@@ -1,0 +1,69 @@
+// Database layer for the HEK timeclock (MongoDB).
+//
+// Connection comes from the DATABASE_URL environment variable — set it to the
+// MongoDB connection string your provider gives you (e.g. MongoDB Atlas:
+// mongodb+srv://user:pass@cluster.mongodb.net/?...). Nothing is stored on the
+// app server itself.
+//
+// The database name can be set with DB_NAME (default "hektimeclock"); MongoDB
+// creates it automatically on first write.
+
+const { MongoClient } = require('mongodb');
+
+// Collections are filled in by connect() before the server starts handling
+// requests, so handlers can safely read them off this object.
+const store = {
+  client: null,
+  db: null,
+  employees: null,
+  punches: null,
+  counters: null,
+  nextId,
+};
+
+// Memoized so repeated calls (e.g. per serverless-function invocation) reuse a
+// single connection/pool instead of reconnecting every time.
+let connecting = null;
+
+function connect() {
+  if (!connecting) connecting = doConnect();
+  return connecting;
+}
+
+async function doConnect() {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      'DATABASE_URL is not set. Put your MongoDB connection string in the ' +
+        'DATABASE_URL environment variable (see .env.example).'
+    );
+  }
+
+  store.client = new MongoClient(url);
+  await store.client.connect();
+  store.db = store.client.db(process.env.DB_NAME || 'hektimeclock');
+  store.employees = store.db.collection('employees');
+  store.punches = store.db.collection('punches');
+  store.counters = store.db.collection('counters');
+  store.rateLimits = store.db.collection('rate_limits');
+
+  await store.employees.createIndex({ pin: 1 });
+  await store.punches.createIndex({ employee_id: 1 });
+  await store.punches.createIndex({ employee_id: 1, clock_out: 1 });
+  // Auto-remove stale rate-limit records an hour after they were last touched.
+  await store.rateLimits.createIndex({ windowStart: 1 }, { expireAfterSeconds: 3600 });
+}
+
+// Atomic auto-incrementing integer id per collection name, so employees and
+// punches keep simple numeric ids (1, 2, 3, …) instead of ObjectIds.
+async function nextId(name) {
+  const r = await store.counters.findOneAndUpdate(
+    { _id: name },
+    { $inc: { seq: 1 } },
+    { upsert: true, returnDocument: 'after' }
+  );
+  const doc = r && r.value ? r.value : r; // driver v6 returns the doc directly
+  return doc.seq;
+}
+
+module.exports = { connect, store };

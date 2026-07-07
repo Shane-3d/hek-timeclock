@@ -1,0 +1,20 @@
+# Netlify deploy config for the HEK timeclock.
+#
+# The employee + admin pages are served as static files from "dist" (assembled
+# by scripts/build-netlify.js). The Express API runs as a serverless function
+# and all /api/* requests are routed to it.
+
+[build]
+  command = "node scripts/build-netlify.js"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Route the API to the serverless function. The extra "/api" in the target is
+# kept so Express still sees paths like "/api/status".
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <title>HEK Fencing — Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Login gate (shown by default; hidden by JS if already signed in) -->
+    <div class="wrap" id="loginView">
+      <div class="brand">
+        <div class="hek">HEK</div>
+        <div class="sub">FENCING</div>
+      </div>
+      <div class="card">
+        <h2 style="text-align:center;margin-top:0">Admin sign-in</h2>
+        <label for="email">Email</label>
+        <input id="email" type="email" style="width:100%;margin-bottom:12px" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email"
+               placeholder="admin@hekfencing.com" />
+        <label for="pw">Password</label>
+        <input id="pw" type="password" style="width:100%" autocomplete="current-password"
+               autocapitalize="none" autocorrect="off" spellcheck="false" />
+        <button class="btn gold" id="loginBtn" style="margin-top:14px">Sign in</button>
+        <div class="msg err" id="loginMsg"></div>
+        <div class="footer-link"><a href="/">← Back to clock-in</a></div>
+      </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="app" style="display:none">
+      <div class="topbar">
+        <div class="logo">HEK <small>TIMECLOCK</small></div>
+        <button class="btn ghost sm" id="logoutBtn">Sign out</button>
+      </div>
+      <div class="admin-wrap">
+        <div class="tabs">
+          <div class="tab active" data-tab="live">On the clock</div>
+          <div class="tab" data-tab="sheets">Timesheets</div>
+          <div class="tab" data-tab="employees">Employees</div>
+        </div>
+
+        <!-- LIVE -->
+        <section class="section active" id="tab-live">
+          <div class="stat-row">
+            <div class="stat"><div class="n" id="liveCount">0</div><div class="l">Currently clocked in</div></div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Employee</th><th>Since</th><th>Elapsed</th></tr></thead>
+              <tbody id="liveBody"></tbody>
+            </table>
+            <p class="status-sub" id="liveEmpty" style="display:none">Nobody is on the clock right now.</p>
+          </div>
+        </section>
+
+        <!-- TIMESHEETS -->
+        <section class="section" id="tab-sheets">
+          <div class="card" style="margin-bottom:16px">
+            <div class="row">
+              <div class="field"><label>Employee</label>
+                <select id="tsEmp"><option value="">All employees</option></select></div>
+              <div class="field"><label>From</label><input type="date" id="tsFrom" /></div>
+              <div class="field"><label>To</label><input type="date" id="tsTo" /></div>
+              <button class="btn gold sm" id="tsLoad">Load</button>
+              <button class="btn ghost sm" id="tsExport">Export CSV</button>
+              <button class="btn ghost sm" id="tsAdd">+ Add entry</button>
+            </div>
+          </div>
+          <div class="stat-row">
+            <div class="stat"><div class="n" id="tsTotal">0.00</div><div class="l">Total hours</div></div>
+            <div class="stat"><div class="n" id="tsEntries">0</div><div class="l">Entries</div></div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Employee</th><th>Clock In</th><th>Clock Out</th><th>Hours</th><th>Work done</th><th></th></tr></thead>
+              <tbody id="tsBody"></tbody>
+            </table>
+            <p class="status-sub" id="tsEmpty" style="display:none">No entries for this range.</p>
+          </div>
+        </section>
+
+        <!-- EMPLOYEES -->
+        <section class="section" id="tab-employees">
+          <div class="card" style="margin-bottom:16px">
+            <h3 style="margin-top:0">Add employee</h3>
+            <div class="row">
+              <div class="field"><label>Name</label><input id="newName" placeholder="Jane Doe" /></div>
+              <div class="field"><label>4-digit PIN</label><input id="newPin" inputmode="numeric" maxlength="4" placeholder="1234" /></div>
+              <button class="btn gold sm" id="addEmp">Add</button>
+            </div>
+            <div class="msg err" id="empMsg"></div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Name</th><th>PIN</th><th>Status</th><th></th></tr></thead>
+              <tbody id="empBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Edit / add punch modal -->
+    <div class="modal-back" id="modalBack">
+      <div class="modal">
+        <h3 id="modalTitle">Edit entry</h3>
+        <div class="row" id="modalEmpRow" style="display:none">
+          <div class="field" style="flex:1"><label>Employee</label>
+            <select id="mEmp" style="width:100%"></select></div>
+        </div>
+        <div class="row"><div class="field" style="flex:1"><label>Clock in</label>
+          <input type="datetime-local" id="mIn" style="width:100%" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>Clock out (leave blank if still on the clock)</label>
+          <input type="datetime-local" id="mOut" style="width:100%" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>Work done that day</label>
+          <input id="mWork" style="width:100%" placeholder="what the employee worked on" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>Missed clock-out reason</label>
+          <input id="mReason" style="width:100%" placeholder="why they didn't clock out" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>Admin note</label>
+          <input id="mNote" style="width:100%" placeholder="e.g. corrected time" /></div></div>
+        <div class="msg err" id="modalMsg"></div>
+        <div class="row" style="justify-content:space-between;margin-top:8px">
+          <button class="link-btn danger" id="mDelete">Delete entry</button>
+          <div>
+            <button class="btn ghost sm" id="mCancel">Cancel</button>
+            <button class="btn gold sm" id="mSave">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/admin.js"></script>
+  </body>
+</html>

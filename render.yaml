@@ -1,0 +1,26 @@
+# One-click deploy config for Render (https://render.com).
+# Push this repo to GitHub, then in Render choose "New +" -> "Blueprint" and
+# point it at the repo. Render reads this file.
+#
+# Data lives in your cloud MongoDB (DATABASE_URL) — no disk is mounted here.
+# Set DATABASE_URL, ADMIN_EMAIL, and ADMIN_PASSWORD in the Render dashboard.
+services:
+  - type: web
+    name: hek-timeclock
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false # paste your MongoDB connection string in the dashboard
+      - key: ADMIN_EMAIL
+        sync: false # set your admin email in the dashboard
+      - key: ADMIN_PASSWORD
+        sync: false # set your admin password in the dashboard
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_PATH
+        value: /office
+      - key: TIMEZONE
+        value: America/New_York
