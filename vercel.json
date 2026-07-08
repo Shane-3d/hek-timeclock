@@ -1,10 +1,7 @@
 {
-  "buildCommand": "echo no build step needed",
-  "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "includeFiles": "{public,views}/**",
-      "maxDuration": 30
+      "includeFiles": "{public,views}/**"
     }
   },
   "rewrites": [
