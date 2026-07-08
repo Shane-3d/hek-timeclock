@@ -41,17 +41,18 @@
 
           <div style="margin-top:14px">
             <label>Clock-out time</label>
-            <div style="display:flex;gap:16px;margin-bottom:8px">
-              <label style="display:flex;align-items:center;gap:6px;color:var(--text)">
-                <input type="radio" name="cot" id="cotNow" value="now" checked style="width:auto" />
-                Now (<span id="nowLabel"></span>)
+            <div class="cot-options">
+              <label class="cot-option active" id="cotNowLabel">
+                <input type="radio" name="cot" id="cotNow" value="now" checked />
+                <span class="cot-title">Now</span>
+                <span class="cot-sub" id="nowLabel"></span>
               </label>
-              <label style="display:flex;align-items:center;gap:6px;color:var(--text)">
-                <input type="radio" name="cot" id="cotOther" value="other" style="width:auto" />
-                Another time
+              <label class="cot-option" id="cotOtherLabel">
+                <input type="radio" name="cot" id="cotOther" value="other" />
+                <span class="cot-title">Another time</span>
               </label>
             </div>
-            <input type="datetime-local" id="customOut" style="width:100%;display:none" />
+            <input type="datetime-local" id="customOut" class="cot-input" style="display:none" />
           </div>
         </div>
 

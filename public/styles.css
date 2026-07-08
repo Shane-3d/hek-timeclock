@@ -160,19 +160,54 @@ h1, h2 { font-weight: 700; }
 .topbar .logo { font-weight: 800; letter-spacing: 4px; color: var(--gold); font-size: 22px; }
 .topbar .logo small { color: var(--text); font-weight: 600; letter-spacing: 2px; font-size: 12px; }
 
-.admin-wrap { max-width: 1000px; margin: 0 auto; padding: 18px; }
+/* Full-height sidebar layout */
+.admin-layout { display: flex; min-height: 100vh; }
 
-.tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
-.tab {
-  padding: 10px 16px;
-  border-radius: 10px;
+.sidebar {
+  width: 230px;
+  flex-shrink: 0;
   background: var(--panel);
-  border: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.side-brand {
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: var(--gold);
+  font-size: 22px;
+  padding: 6px 10px 20px;
+}
+.side-brand small { display: block; color: var(--text); font-weight: 600; letter-spacing: 2px; font-size: 11px; margin-top: 4px; }
+.side-nav { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+
+.main { flex: 1; min-width: 0; padding: 28px 32px; overflow-x: auto; }
+
+.tab {
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--muted);
   cursor: pointer;
   font-weight: 600;
+  text-align: left;
 }
+.tab:hover { background: var(--panel-2); color: var(--text); }
 .tab.active { color: var(--black); background: var(--gold); border-color: var(--gold); }
+
+/* On narrow screens, stack the sidebar on top as a horizontal menu */
+@media (max-width: 680px) {
+  .admin-layout { flex-direction: column; }
+  .sidebar { width: auto; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--line); }
+  .side-brand { padding-bottom: 12px; }
+  .side-nav { flex-direction: row; flex-wrap: wrap; }
+  .main { padding: 18px; }
+}
 
 .section { display: none; }
 .section.active { display: block; }
@@ -195,6 +230,38 @@ input, select, textarea {
   font-family: inherit;
 }
 textarea { width: 100%; resize: vertical; }
+
+/* Big touch-friendly clock-out time selector */
+.cot-options { display: flex; gap: 12px; }
+.cot-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 68px;
+  padding: 14px 10px;
+  background: var(--panel-2);
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.cot-option input { display: none; }
+.cot-option .cot-title { font-size: 18px; font-weight: 700; }
+.cot-option .cot-sub { font-size: 14px; color: var(--muted); }
+.cot-option.active { border-color: var(--gold); background: rgba(200, 155, 92, 0.16); }
+.cot-option.active .cot-sub { color: var(--gold); }
+.cot-input {
+  width: 100%;
+  margin-top: 12px;
+  font-size: 18px;
+  padding: 14px 12px;
+}
 label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .field { display: flex; flex-direction: column; }

@@ -31,16 +31,17 @@
 
     <!-- Dashboard -->
     <div id="app" style="display:none">
-      <div class="topbar">
-        <div class="logo">HEK <small>TIMECLOCK</small></div>
-        <button class="btn ghost sm" id="logoutBtn">Sign out</button>
-      </div>
-      <div class="admin-wrap">
-        <div class="tabs">
-          <div class="tab active" data-tab="live">On the clock</div>
-          <div class="tab" data-tab="sheets">Timesheets</div>
-          <div class="tab" data-tab="employees">Employees</div>
-        </div>
+      <div class="admin-layout">
+        <aside class="sidebar">
+          <div class="side-brand">HEK <small>TIMECLOCK</small></div>
+          <nav class="side-nav">
+            <div class="tab active" data-tab="live">On the clock</div>
+            <div class="tab" data-tab="sheets">Timesheets</div>
+            <div class="tab" data-tab="employees">Employees</div>
+          </nav>
+          <button class="btn ghost sm" id="logoutBtn">Sign out</button>
+        </aside>
+        <main class="main">
 
         <!-- LIVE -->
         <section class="section active" id="tab-live">
@@ -100,6 +101,7 @@
             </table>
           </div>
         </section>
+        </main>
       </div>
     </div>
 

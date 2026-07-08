@@ -18,6 +18,8 @@
   const workDone = $('workDone');
   const cotNow = $('cotNow');
   const cotOther = $('cotOther');
+  const cotNowLabel = $('cotNowLabel');
+  const cotOtherLabel = $('cotOtherLabel');
   const customOut = $('customOut');
 
   // datetime-local value (local time) reflecting "now", used for defaults/max.
@@ -26,8 +28,10 @@
     return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   }
 
-  // Toggle the custom time picker when the radio changes.
+  // Toggle the custom time picker + highlight the selected big button.
   function syncCotUI() {
+    cotNowLabel.classList.toggle('active', cotNow.checked);
+    cotOtherLabel.classList.toggle('active', cotOther.checked);
     if (cotOther.checked) {
       customOut.style.display = 'block';
       if (!customOut.value) customOut.value = localNowInput();
