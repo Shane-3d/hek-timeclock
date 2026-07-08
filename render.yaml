@@ -21,6 +21,6 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: ADMIN_PATH
-        value: /office
+        value: /fence
       - key: TIMEZONE
         value: America/New_York
