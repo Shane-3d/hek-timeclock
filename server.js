@@ -691,6 +691,15 @@ app.get('/healthz', (req, res) => res.json({ ok: true }));
 // any host that runs `node server.js`). When required by the Netlify function,
 // this block is skipped and the function manages the DB connection itself.
 if (require.main === module) {
+  // Safety net: log transient errors instead of letting one bad request or a
+  // brief database hiccup crash the whole server.
+  process.on('unhandledRejection', (err) => {
+    console.error('[unhandledRejection]', err);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err);
+  });
+
   connect()
     .then(() => {
       app.listen(PORT, () => {
