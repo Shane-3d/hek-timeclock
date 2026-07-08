@@ -687,6 +687,23 @@ app.get(ADMIN_PATH, (req, res) => {
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
+// Diagnostic: reports whether the database is reachable and, if not, the exact
+// error. Always returns HTTP 200 so the body is easy to read.
+app.get('/dbcheck', async (req, res) => {
+  try {
+    await connect();
+    await store.client.db().command({ ping: 1 });
+    res.json({ db: 'connected', hasUrl: !!process.env.DATABASE_URL });
+  } catch (err) {
+    res.json({
+      db: 'FAILED',
+      error: err.message,
+      code: err.code || err.codeName || null,
+      hasUrl: !!process.env.DATABASE_URL,
+    });
+  }
+});
+
 // Start a normal long-running server only when run directly (local / Render /
 // any host that runs `node server.js`). When required by the Netlify function,
 // this block is skipped and the function manages the DB connection itself.
