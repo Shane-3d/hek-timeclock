@@ -3,7 +3,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "includeFiles": "views/**"
+      "includeFiles": "{public,views}/**"
     }
   },
   "rewrites": [
