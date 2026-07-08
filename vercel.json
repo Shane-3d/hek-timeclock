@@ -3,7 +3,8 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "includeFiles": "{public,views}/**"
+      "includeFiles": "{public,views}/**",
+      "maxDuration": 30
     }
   },
   "rewrites": [

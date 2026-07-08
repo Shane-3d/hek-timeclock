@@ -39,7 +39,10 @@ async function doConnect() {
     );
   }
 
-  store.client = new MongoClient(url);
+  // Short server-selection timeout so a bad/unreachable connection fails fast
+  // with a clear error, instead of hanging until the serverless function is
+  // killed (which shows up as a generic FUNCTION_INVOCATION_FAILED crash).
+  store.client = new MongoClient(url, { serverSelectionTimeoutMS: 8000 });
   await store.client.connect();
   store.db = store.client.db(process.env.DB_NAME || 'hektimeclock');
   store.employees = store.db.collection('employees');
