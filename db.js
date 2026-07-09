@@ -18,6 +18,9 @@ const store = {
   employees: null,
   punches: null,
   counters: null,
+  quotes: null,
+  schedules: null,
+  settings: null,
   nextId,
 };
 
@@ -49,10 +52,25 @@ async function doConnect() {
   store.punches = store.db.collection('punches');
   store.counters = store.db.collection('counters');
   store.rateLimits = store.db.collection('rate_limits');
+  store.quotes = store.db.collection('quotes');
+  // Scheduled jobs: an address + description assigned to one or more employees.
+  store.schedules = store.db.collection('schedules');
+  // Small key/value collection for app config — currently the admin login
+  // credentials (doc _id: 'admin'), seeded from env on first run.
+  store.settings = store.db.collection('settings');
 
   await store.employees.createIndex({ pin: 1 });
+  // Unique login email, but only for employees that actually have one set
+  // (existing PIN-only employees have no email and must not collide on null).
+  await store.employees.createIndex(
+    { email: 1 },
+    { unique: true, partialFilterExpression: { email: { $type: 'string' } } }
+  );
   await store.punches.createIndex({ employee_id: 1 });
   await store.punches.createIndex({ employee_id: 1, clock_out: 1 });
+  await store.quotes.createIndex({ created_at: -1 });
+  await store.schedules.createIndex({ date: 1 });
+  await store.schedules.createIndex({ employee_ids: 1 });
   // Auto-remove stale rate-limit records an hour after they were last touched.
   await store.rateLimits.createIndex({ windowStart: 1 }, { expireAfterSeconds: 3600 });
 }

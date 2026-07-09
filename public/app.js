@@ -2,6 +2,7 @@
 (function () {
   let pin = '';
   let current = null; // { id, name, clockedIn, since, missed }
+  let loading = false; // true while the 4-digit PIN is being looked up
 
   const $ = (id) => document.getElementById(id);
   const dotsEl = $('dots');
@@ -77,12 +78,25 @@
   });
 
   function press(k) {
+    if (loading) return; // ignore taps while a lookup is in flight
     pinMsg.textContent = '';
     if (k === 'C') pin = '';
     else if (k === '⌫') pin = pin.slice(0, -1);
     else if (pin.length < 4) pin += k;
     renderDots();
     if (pin.length === 4) lookup();
+  }
+
+  // Show/hide the "checking the PIN" state: pulse the dots, lock the keypad,
+  // so the moment the 4th digit lands it's obvious something is happening.
+  function setLoading(on) {
+    loading = on;
+    keypadEl.classList.toggle('loading', on);
+    dotsEl.classList.toggle('loading', on);
+    if (on) {
+      pinMsg.className = 'msg';
+      pinMsg.textContent = 'Checking…';
+    }
   }
 
   document.addEventListener('keydown', (e) => {
@@ -108,6 +122,7 @@
     new Date(iso).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
   async function lookup() {
+    setLoading(true);
     try {
       current = await api('/api/status', { pin });
       if (current.missed) showMissed();
@@ -117,6 +132,8 @@
       pinMsg.textContent = err.message;
       pin = '';
       renderDots();
+    } finally {
+      setLoading(false);
     }
   }
 

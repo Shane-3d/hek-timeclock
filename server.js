@@ -1,6 +1,10 @@
 // HEK Fencing Inc. timeclock server.
-// - Public: mobile clock-in page (PIN based) at "/"
-// - Admin:  dashboard at ADMIN_PATH protected by an email + password.
+// - Public:   shared PIN clock-in page at "/timeclock".
+// - Employee: personal login (email + password) at "/" — an employee portal
+//             that always shows the employee their own hours, plus any extra
+//             features the admin has granted them (permissions).
+// - Admin:    dashboard at ADMIN_PATH protected by an email + password. The
+//             admin can also sign in from "/" and is redirected to ADMIN_PATH.
 //
 // All data lives in a cloud MongoDB database (see db.js / DATABASE_URL).
 
@@ -14,6 +18,7 @@ try {
 }
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const { connect, store } = require('./db');
@@ -22,11 +27,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@hekfencing.com').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
+// A built-in "dev" account: a limited admin that can use everything in the
+// dashboard EXCEPT the clock-in features. Seeded into the database on first run.
+const DEV_EMAIL = (process.env.DEV_EMAIL || 'dev@hek-fencing.com').toLowerCase();
+const DEV_PASSWORD = process.env.DEV_PASSWORD || 'golfcart';
 const SESSION_SECRET =
   process.env.SESSION_SECRET || 'hek-timeclock-dev-secret-please-change';
-// The admin dashboard lives at this (deliberately non-obvious) path so it isn't
-// linked from the employee clock-in page. Override it with the ADMIN_PATH env var.
-const ADMIN_PATH = process.env.ADMIN_PATH || '/office';
+// The admin dashboard is its own page served at this path. Admins reach it by
+// signing in on the main page ("/"), which redirects here — they never type it.
+// Override with the ADMIN_PATH env var.
+const ADMIN_PATH = process.env.ADMIN_PATH || '/admin';
 // Timezone used to decide when "today" starts, so a missed clock-out from a
 // previous day is detected correctly. Set it to your region.
 const TIMEZONE = process.env.TIMEZONE || 'America/New_York';
@@ -68,6 +78,89 @@ app.use(
   })
 );
 
+// The "dev" account is a limited admin: it can use the dashboard's non-clock-in
+// features (quotes, pricing, scheduling, employees) but not the timeclock data,
+// nor the admin's own login settings. Enforced here in one place.
+const DEV_BLOCKED = [
+  '/api/admin/active',
+  '/api/admin/timesheet',
+  '/api/admin/export.csv',
+  '/api/admin/credentials',
+];
+app.use((req, res, next) => {
+  if (req.session && req.session.role === 'dev') {
+    if (DEV_BLOCKED.includes(req.path) || req.path.startsWith('/api/admin/punches')) {
+      return res.status(403).json({ error: 'Not available for the dev account.' });
+    }
+  }
+  next();
+});
+
+// ---------------------------------------------------------------------------
+// Feature entitlements — the dev account decides which paid features the client
+// (the real admin) may use. Turning one off removes it for everyone in the org
+// EXCEPT the dev, who controls it. Stored in settings doc _id:'entitlements'.
+// ---------------------------------------------------------------------------
+
+const ADMIN_FEATURES = [
+  { key: 'quotes', label: 'Quotes / estimates' },
+  { key: 'schedule', label: 'Scheduling' },
+  { key: 'pricing', label: 'Pricing calculator' },
+];
+// Which request paths belong to each feature (used to block them when disabled).
+const FEATURE_MATCH = {
+  quotes: (p) => p.startsWith('/api/admin/quotes'),
+  schedule: (p) =>
+    p.startsWith('/api/admin/schedules') ||
+    p === '/api/admin/geocode' ||
+    p.startsWith('/api/my/schedules'),
+  pricing: () => false, // client-only calculator; no endpoints to guard
+};
+
+let _entitlements = null; // cached; reloaded on write and on cold start
+function normalizeEntitlements(f) {
+  f = f || {};
+  const out = {};
+  for (const feat of ADMIN_FEATURES) out[feat.key] = f[feat.key] !== false; // default ON
+  return out;
+}
+async function getEntitlements() {
+  if (_entitlements) return _entitlements;
+  const doc = await store.settings.findOne({ _id: 'entitlements' });
+  _entitlements = normalizeEntitlements(doc && doc.features);
+  return _entitlements;
+}
+async function setEntitlements(patch) {
+  const next = { ...(await getEntitlements()) };
+  for (const feat of ADMIN_FEATURES) if (patch[feat.key] != null) next[feat.key] = !!patch[feat.key];
+  await store.settings.updateOne({ _id: 'entitlements' }, { $set: { features: next } }, { upsert: true });
+  _entitlements = next;
+  return next;
+}
+
+// Block a disabled feature's endpoints for everyone except the dev.
+app.use(async (req, res, next) => {
+  try {
+    if (req.session && req.session.role === 'dev') return next();
+    if (!req.path.startsWith('/api/')) return next();
+    let feat = null;
+    for (const f of ADMIN_FEATURES) {
+      if (FEATURE_MATCH[f.key] && FEATURE_MATCH[f.key](req.path)) {
+        feat = f.key;
+        break;
+      }
+    }
+    if (feat) {
+      const ent = await getEntitlements();
+      if (!ent[feat])
+        return res.status(403).json({ error: 'This feature is turned off. Contact your provider.' });
+    }
+  } catch (e) {
+    /* fail open — a lookup error shouldn't take the whole app down */
+  }
+  next();
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -79,9 +172,146 @@ function requireAdmin(req, res, next) {
   return res.status(401).json({ error: 'Not authorized' });
 }
 
+// Only the dev account may manage which features the client can use.
+function requireDev(req, res, next) {
+  if (req.session && req.session.admin && req.session.role === 'dev') return next();
+  if (req.session && req.session.admin) return res.status(403).json({ error: 'Not authorized' });
+  return res.status(401).json({ error: 'Not authorized' });
+}
+
 function validPin(pin) {
   return typeof pin === 'string' && /^\d{4}$/.test(pin);
 }
+
+function validEmail(e) {
+  return typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+}
+
+// The features an admin can grant an employee. "My hours" is always available
+// and is not listed here. Add new permission keys here as features are built.
+const ALL_PERMISSIONS = ['quotes'];
+function cleanPermissions(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.filter((p) => ALL_PERMISSIONS.includes(p)))];
+}
+
+// Password hashing with Node's built-in scrypt (no extra dependency needed).
+// Stored as a hex salt + hex hash on the employee document.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return { password_salt: salt, password_hash: hash };
+}
+function verifyPassword(password, salt, hash) {
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  const a = Buffer.from(test, 'hex');
+  const b = Buffer.from(hash, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// Admin credentials — stored in MongoDB (settings doc _id:'admin'), hashed with
+// the same scrypt used for employees. Seeded once from the ADMIN_EMAIL /
+// ADMIN_PASSWORD env vars so existing deployments keep working; after that the
+// admin can change them from the dashboard and the env vars are no longer used.
+// ---------------------------------------------------------------------------
+
+// Load the admin credential doc, creating it from the env vars on first run.
+async function getAdminRecord() {
+  let doc = await store.settings.findOne({ _id: 'admin' });
+  if (!doc) {
+    // Upsert with $setOnInsert so two concurrent first-boots can't double-insert.
+    await store.settings.updateOne(
+      { _id: 'admin' },
+      { $setOnInsert: { email: ADMIN_EMAIL, ...hashPassword(ADMIN_PASSWORD), created_at: new Date() } },
+      { upsert: true }
+    );
+    doc = await store.settings.findOne({ _id: 'admin' });
+  }
+  return doc;
+}
+
+// True when email + password match the stored admin credentials.
+async function checkAdmin(email, password) {
+  const admin = await getAdminRecord();
+  const emailOk = (email || '').trim().toLowerCase() === (admin.email || '').toLowerCase();
+  return emailOk && verifyPassword(password, admin.password_salt, admin.password_hash);
+}
+
+// The "dev" account lives in the same settings collection (doc _id:'dev'),
+// seeded from DEV_EMAIL / DEV_PASSWORD on first run.
+async function getDevRecord() {
+  let doc = await store.settings.findOne({ _id: 'dev' });
+  if (!doc) {
+    await store.settings.updateOne(
+      { _id: 'dev' },
+      { $setOnInsert: { email: DEV_EMAIL, ...hashPassword(DEV_PASSWORD), created_at: new Date() } },
+      { upsert: true }
+    );
+    doc = await store.settings.findOne({ _id: 'dev' });
+  }
+  return doc;
+}
+async function checkDev(email, password) {
+  const dev = await getDevRecord();
+  const emailOk = (email || '').trim().toLowerCase() === (dev.email || '').toLowerCase();
+  return emailOk && verifyPassword(password, dev.password_salt, dev.password_hash);
+}
+
+// Shape an employee document for the current session (never leaks the hash).
+function selfView(emp) {
+  return {
+    id: emp._id,
+    name: emp.name,
+    email: emp.email || null,
+    permissions: emp.permissions || [],
+  };
+}
+
+// Require a signed-in employee; attaches the fresh employee doc as req.employee.
+function requireEmployee(req, res, next) {
+  if (!req.session || !req.session.employeeId)
+    return res.status(401).json({ error: 'Please sign in.' });
+  store.employees
+    .findOne({ _id: req.session.employeeId, active: true })
+    .then((emp) => {
+      if (!emp) {
+        req.session = null;
+        return res.status(401).json({ error: 'Please sign in.' });
+      }
+      req.employee = emp;
+      next();
+    })
+    .catch((err) => {
+      console.error(err);
+      res.status(500).json({ error: 'Server error.' });
+    });
+}
+
+// Allow admins, or employees who have been granted a specific permission.
+function requirePermission(perm) {
+  return (req, res, next) => {
+    if (req.session && req.session.admin) return next();
+    if (!req.session || !req.session.employeeId)
+      return res.status(401).json({ error: 'Please sign in.' });
+    store.employees
+      .findOne({ _id: req.session.employeeId, active: true })
+      .then((emp) => {
+        if (!emp || !(emp.permissions || []).includes(perm)) {
+          req.session = emp ? req.session : null;
+          return res.status(403).json({ error: 'Not permitted.' });
+        }
+        req.employee = emp;
+        next();
+      })
+      .catch((err) => {
+        console.error(err);
+        res.status(500).json({ error: 'Server error.' });
+      });
+  };
+}
+const requireQuotes = requirePermission('quotes');
 
 const wrap = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch((err) => {
@@ -195,6 +425,7 @@ const limiter = (scope) => async (req, res, next) => {
 
 const pinLimiter = limiter('pin');
 const adminLimiter = limiter('admin');
+const loginLimiter = limiter('login');
 
 // Look up an employee by PIN, recording a failed attempt (for rate limiting) if
 // the PIN is unknown and clearing the counter on success.
@@ -346,6 +577,101 @@ app.post(
 );
 
 // ---------------------------------------------------------------------------
+// Employee / unified auth (used by the login page at "/")
+// ---------------------------------------------------------------------------
+
+// One login form for everyone. Admin credentials sign in as admin (and the
+// client redirects to the dashboard); everyone else signs in as an employee.
+app.post(
+  '/api/login',
+  loginLimiter,
+  wrap(async (req, res) => {
+    const email = (req.body?.email || '').trim().toLowerCase();
+    const password = req.body?.password || '';
+    if (!email || !password)
+      return res.status(400).json({ error: 'Enter your email and password.' });
+
+    // Admin?
+    if (await checkAdmin(email, password)) {
+      await clearFails(req._rlKey);
+      req.session.admin = true;
+      req.session.role = 'admin';
+      req.session.employeeId = null;
+      return res.json({ role: 'admin', redirect: ADMIN_PATH });
+    }
+
+    // Dev — a limited admin (everything in the dashboard except clock-in).
+    if (await checkDev(email, password)) {
+      await clearFails(req._rlKey);
+      req.session.admin = true;
+      req.session.role = 'dev';
+      req.session.employeeId = null;
+      return res.json({ role: 'admin', redirect: ADMIN_PATH });
+    }
+
+    // Employee?
+    const emp = await store.employees.findOne({ email });
+    if (!emp || !emp.active || !verifyPassword(password, emp.password_salt, emp.password_hash)) {
+      await recordFail(req._rlKey);
+      return res.status(401).json({ error: 'Wrong email or password.' });
+    }
+    await clearFails(req._rlKey);
+    req.session.admin = false;
+    req.session.employeeId = emp._id;
+    res.json({ role: 'employee', ...selfView(emp) });
+  })
+);
+
+app.post('/api/logout', (req, res) => {
+  req.session = null;
+  res.json({ ok: true });
+});
+
+// Who am I? Used by the portal (and by the shared login page) to restore state.
+app.get(
+  '/api/me',
+  wrap(async (req, res) => {
+    if (req.session && req.session.admin) return res.json({ role: 'admin', redirect: ADMIN_PATH });
+    if (req.session && req.session.employeeId) {
+      const emp = await store.employees.findOne({ _id: req.session.employeeId, active: true });
+      if (emp) return res.json({ role: 'employee', ...selfView(emp) });
+    }
+    res.json({ role: null });
+  })
+);
+
+// An employee's own timesheet — always available to a signed-in employee.
+app.get(
+  '/api/my/timesheet',
+  requireEmployee,
+  wrap(async (req, res) => {
+    const rows = await timesheetRows({
+      employeeId: req.employee._id,
+      from: req.query.from,
+      to: req.query.to,
+    });
+    let total = 0;
+    const entries = rows.map((r) => {
+      const hours = hoursOf(r);
+      if (hours) total += hours;
+      return { ...r, clock_in: iso(r.clock_in), clock_out: iso(r.clock_out), hours };
+    });
+    res.json({ entries, totalHours: Math.round(total * 100) / 100 });
+  })
+);
+
+// The jobs assigned to the signed-in employee — always available, no permission
+// needed. Sorted soonest-first so the next job is at the top.
+app.get(
+  '/api/my/schedules',
+  requireEmployee,
+  wrap(async (req, res) => {
+    const docs = await store.schedules.find({ employee_ids: req.employee._id }).toArray();
+    res.json({ jobs: docs.map(publicScheduleView).sort(scheduleSort) });
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Admin auth
 // ---------------------------------------------------------------------------
 
@@ -355,10 +681,19 @@ app.post(
   wrap(async (req, res) => {
     const email = (req.body?.email || '').trim().toLowerCase();
     const { password } = req.body || {};
-    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+    if (await checkAdmin(email, password)) {
       await clearFails(req._rlKey);
       req.session.admin = true;
-      return res.json({ ok: true, email });
+      req.session.role = 'admin';
+      req.session.email = email;
+      return res.json({ ok: true, email, role: 'admin' });
+    }
+    if (await checkDev(email, password)) {
+      await clearFails(req._rlKey);
+      req.session.admin = true;
+      req.session.role = 'dev';
+      req.session.email = email;
+      return res.json({ ok: true, email, role: 'dev' });
     }
     await recordFail(req._rlKey);
     res.status(401).json({ error: 'Wrong email or password.' });
@@ -370,9 +705,83 @@ app.post('/api/admin/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/me', (req, res) => {
-  res.json({ admin: !!(req.session && req.session.admin) });
-});
+app.get(
+  '/api/admin/me',
+  wrap(async (req, res) => {
+    const admin = !!(req.session && req.session.admin);
+    const role = admin ? (req.session.role === 'dev' ? 'dev' : 'admin') : null;
+    let email = null;
+    let features = null;
+    if (admin) {
+      try {
+        email = (role === 'dev' ? await getDevRecord() : await getAdminRecord()).email;
+      } catch (e) {
+        /* fall back to no email if the settings doc can't be read */
+      }
+      try {
+        features = await getEntitlements();
+      } catch (e) {
+        /* fall back to no feature info */
+      }
+    }
+    res.json({ admin, role, email, features });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Dev: manage which features the client (real admin) can use.
+// ---------------------------------------------------------------------------
+
+const featureList = (ent) =>
+  ADMIN_FEATURES.map((f) => ({ key: f.key, label: f.label, enabled: ent[f.key] }));
+
+app.get(
+  '/api/dev/features',
+  requireDev,
+  wrap(async (req, res) => {
+    res.json({ features: featureList(await getEntitlements()) });
+  })
+);
+
+app.patch(
+  '/api/dev/features',
+  requireDev,
+  wrap(async (req, res) => {
+    const next = await setEntitlements(req.body || {});
+    res.json({ features: featureList(next) });
+  })
+);
+
+// Change the admin login (email and/or password), stored in MongoDB. Requires
+// an already-signed-in admin session.
+app.patch(
+  '/api/admin/credentials',
+  requireAdmin,
+  wrap(async (req, res) => {
+    await getAdminRecord(); // ensure the doc exists before updating
+    const set = {};
+    if (req.body?.email != null) {
+      const email = String(req.body.email).trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+        return res.status(400).json({ error: 'Enter a valid email.' });
+      set.email = email;
+    }
+    if (req.body?.password) {
+      const password = String(req.body.password);
+      if (password.length < 6)
+        return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+      Object.assign(set, hashPassword(password));
+    }
+    if (!Object.keys(set).length)
+      return res.status(400).json({ error: 'Enter a new email or password.' });
+
+    set.updated_at = new Date();
+    await store.settings.updateOne({ _id: 'admin' }, { $set: set });
+    const updated = await getAdminRecord();
+    if (set.email) req.session.email = updated.email;
+    res.json({ ok: true, email: updated.email });
+  })
+);
 
 // ---------------------------------------------------------------------------
 // Admin: employees
@@ -388,6 +797,9 @@ app.get(
         id: e._id,
         name: e.name,
         pin: e.pin,
+        email: e.email || null,
+        permissions: e.permissions || [],
+        hasPassword: !!e.password_hash,
         active: e.active,
         created_at: e.created_at,
       }))
@@ -395,27 +807,44 @@ app.get(
   })
 );
 
+// Also tell the admin UI which permission keys exist, so it can render the
+// right checkboxes without hard-coding the list in two places.
+app.get('/api/admin/permissions', requireAdmin, (req, res) => {
+  res.json({ permissions: ALL_PERMISSIONS });
+});
+
 app.post(
   '/api/admin/employees',
   requireAdmin,
   wrap(async (req, res) => {
     const name = (req.body?.name || '').trim();
     const pin = (req.body?.pin || '').trim();
+    const email = (req.body?.email || '').trim().toLowerCase();
+    const password = req.body?.password || '';
+    const permissions = cleanPermissions(req.body?.permissions);
     if (!name) return res.status(400).json({ error: 'Name is required.' });
     if (!validPin(pin)) return res.status(400).json({ error: 'PIN must be 4 digits.' });
+    if (email && !validEmail(email))
+      return res.status(400).json({ error: 'Enter a valid email address.' });
 
     if (await store.employees.findOne({ pin }))
       return res.status(409).json({ error: 'That PIN is already in use.' });
+    if (email && (await store.employees.findOne({ email })))
+      return res.status(409).json({ error: 'That email is already in use.' });
 
     const _id = await store.nextId('employees');
-    await store.employees.insertOne({
+    const doc = {
       _id,
       name,
       pin,
+      email: email || null,
+      permissions,
       active: true,
       created_at: new Date(),
-    });
-    res.json({ id: _id, name, pin, active: true });
+    };
+    if (email && password) Object.assign(doc, hashPassword(password));
+    await store.employees.insertOne(doc);
+    res.json({ id: _id, name, pin, email: doc.email, permissions, active: true });
   })
 );
 
@@ -438,8 +867,35 @@ app.patch(
     if (await store.employees.findOne({ pin, _id: { $ne: id } }))
       return res.status(409).json({ error: 'That PIN is already in use.' });
 
-    await store.employees.updateOne({ _id: id }, { $set: { name, pin, active } });
-    res.json({ id, name, pin, active });
+    const set = { name, pin, active };
+
+    // Email: allow setting/changing, or clearing with an empty string.
+    if (req.body?.email != null) {
+      const email = String(req.body.email).trim().toLowerCase();
+      if (email && !validEmail(email))
+        return res.status(400).json({ error: 'Enter a valid email address.' });
+      if (email && (await store.employees.findOne({ email, _id: { $ne: id } })))
+        return res.status(409).json({ error: 'That email is already in use.' });
+      set.email = email || null;
+    }
+
+    // Permissions: replace the whole list when provided.
+    if (req.body?.permissions != null) set.permissions = cleanPermissions(req.body.permissions);
+
+    // Password: only when a non-empty new value is supplied.
+    if (req.body?.password) Object.assign(set, hashPassword(req.body.password));
+
+    await store.employees.updateOne({ _id: id }, { $set: set });
+    const updated = await store.employees.findOne({ _id: id });
+    res.json({
+      id,
+      name: updated.name,
+      pin: updated.pin,
+      email: updated.email || null,
+      permissions: updated.permissions || [],
+      hasPassword: !!updated.password_hash,
+      active: updated.active,
+    });
   })
 );
 
@@ -450,6 +906,174 @@ app.delete(
     const id = Number(req.params.id);
     await store.employees.deleteOne({ _id: id });
     await store.punches.deleteMany({ employee_id: id }); // cascade their time entries
+    await store.schedules.updateMany({}, { $pull: { employee_ids: id } }); // unassign jobs
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Scheduling (jobs) — an address + description assigned to one or more
+// employees. Employees see their own jobs in the portal and tap to navigate.
+// ---------------------------------------------------------------------------
+
+const cleanDate = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : null);
+const cleanTime = (s) => (/^\d{2}:\d{2}$/.test(s || '') ? s : null);
+
+// Keep a lat/lng pair only if it's a real, in-range coordinate; else drop both.
+function cleanLatLng(lat, lng) {
+  const a = Number(lat);
+  const b = Number(lng);
+  if (
+    Number.isFinite(a) && Number.isFinite(b) &&
+    a >= -90 && a <= 90 && b >= -180 && b <= 180 && !(a === 0 && b === 0)
+  )
+    return { lat: a, lng: b };
+  return { lat: null, lng: null };
+}
+
+// Narrow a list of ids down to employees that actually exist.
+async function cleanEmployeeIds(list) {
+  const ids = Array.isArray(list)
+    ? [...new Set(list.map(Number).filter((n) => Number.isInteger(n)))]
+    : [];
+  if (!ids.length) return [];
+  const found = await store.employees.find({ _id: { $in: ids } }).toArray();
+  return found.map((e) => e._id);
+}
+
+// Fields safe to send to an employee (no internal assignment list).
+function publicScheduleView(d) {
+  return {
+    id: d._id,
+    address: d.address,
+    description: d.description || null,
+    date: d.date || null,
+    time: d.time || null,
+    lat: d.lat ?? null,
+    lng: d.lng ?? null,
+  };
+}
+
+// Soonest-first: undated jobs sort to the bottom (both date and time are
+// zero-padded strings, so plain string comparison orders them correctly).
+function scheduleSort(a, b) {
+  const ad = a.date || '9999-99-99';
+  const bd = b.date || '9999-99-99';
+  if (ad !== bd) return ad < bd ? -1 : 1;
+  const at = a.time || '99:99';
+  const bt = b.time || '99:99';
+  return at < bt ? -1 : at > bt ? 1 : 0;
+}
+
+// Address autocomplete, proxied to OpenStreetMap's free Nominatim geocoder so we
+// can set a proper User-Agent (their usage policy) and keep it server-side.
+app.get(
+  '/api/admin/geocode',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const q = (req.query.q || '').trim();
+    if (q.length < 3) return res.json({ results: [] });
+    try {
+      const url =
+        'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=' +
+        encodeURIComponent(q);
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'HEK-Timeclock/1.0 (job scheduling address lookup)',
+          'Accept-Language': 'en',
+        },
+      });
+      if (!r.ok) return res.json({ results: [] });
+      const data = await r.json();
+      const results = (Array.isArray(data) ? data : [])
+        .map((d) => ({ label: d.display_name, lat: Number(d.lat), lng: Number(d.lon) }))
+        .filter((x) => x.label && Number.isFinite(x.lat) && Number.isFinite(x.lng));
+      res.json({ results });
+    } catch (err) {
+      console.error('geocode failed:', err.message);
+      res.json({ results: [] });
+    }
+  })
+);
+
+app.get(
+  '/api/admin/schedules',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const docs = await store.schedules.find({}).toArray();
+    const emps = await store.employees.find({}).toArray();
+    const nameById = Object.fromEntries(emps.map((e) => [e._id, e.name]));
+    const jobs = docs
+      .map((d) => ({
+        ...publicScheduleView(d),
+        employee_ids: d.employee_ids || [],
+        employees: (d.employee_ids || []).map((id) => nameById[id] || '(removed)'),
+      }))
+      .sort(scheduleSort);
+    res.json({ jobs });
+  })
+);
+
+app.post(
+  '/api/admin/schedules',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const address = (req.body?.address || '').trim();
+    if (!address) return res.status(400).json({ error: 'An address is required.' });
+    const { lat, lng } = cleanLatLng(req.body?.lat, req.body?.lng);
+    const _id = await store.nextId('schedules');
+    await store.schedules.insertOne({
+      _id,
+      address,
+      description: (req.body?.description || '').trim() || null,
+      date: cleanDate(req.body?.date),
+      time: cleanTime(req.body?.time),
+      lat,
+      lng,
+      employee_ids: await cleanEmployeeIds(req.body?.employee_ids),
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    res.json({ id: _id });
+  })
+);
+
+app.patch(
+  '/api/admin/schedules/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const doc = await store.schedules.findOne({ _id: id });
+    if (!doc) return res.status(404).json({ error: 'Job not found.' });
+
+    const set = { updated_at: new Date() };
+    if (req.body?.address != null) {
+      const address = String(req.body.address).trim();
+      if (!address) return res.status(400).json({ error: 'An address is required.' });
+      set.address = address;
+    }
+    if (req.body?.description != null)
+      set.description = String(req.body.description).trim() || null;
+    if (req.body?.date != null) set.date = cleanDate(req.body.date);
+    if (req.body?.time != null) set.time = cleanTime(req.body.time);
+    if (req.body?.lat !== undefined || req.body?.lng !== undefined) {
+      const { lat, lng } = cleanLatLng(req.body?.lat, req.body?.lng);
+      set.lat = lat;
+      set.lng = lng;
+    }
+    if (req.body?.employee_ids != null)
+      set.employee_ids = await cleanEmployeeIds(req.body.employee_ids);
+
+    await store.schedules.updateOne({ _id: id }, { $set: set });
+    res.json({ ok: true });
+  })
+);
+
+app.delete(
+  '/api/admin/schedules/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    await store.schedules.deleteOne({ _id: Number(req.params.id) });
     res.json({ ok: true });
   })
 );
@@ -674,10 +1298,159 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
+// Admin: quotes / estimates
+// ---------------------------------------------------------------------------
+
+const QUOTE_STATUSES = new Set(['draft', 'sent', 'accepted', 'declined']);
+const toNum = (v) => {
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+};
+const round2 = (n) => Math.round(n * 100) / 100;
+
+function cleanCustomer(c) {
+  c = c || {};
+  return {
+    name: String(c.name || '').trim(),
+    address: String(c.address || '').trim(),
+    phone: String(c.phone || '').trim(),
+    email: String(c.email || '').trim(),
+  };
+}
+
+function cleanItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((it) => ({
+      description: String(it?.description || '').trim(),
+      qty: toNum(it?.qty),
+      unit: String(it?.unit || '').trim(),
+      unit_price: toNum(it?.unit_price),
+    }))
+    .filter((it) => it.description || it.qty || it.unit_price);
+}
+
+function quoteTotals(items, taxRate) {
+  const subtotal = (items || []).reduce((s, it) => s + it.qty * it.unit_price, 0);
+  const tax = subtotal * (toNum(taxRate) / 100);
+  return { subtotal: round2(subtotal), tax: round2(tax), total: round2(subtotal + tax) };
+}
+
+function quoteView(q) {
+  return {
+    id: q._id,
+    number: q.number,
+    customer: q.customer || { name: '', address: '', phone: '', email: '' },
+    quote_date: iso(q.quote_date),
+    items: q.items || [],
+    tax_rate: q.tax_rate || 0,
+    notes: q.notes || '',
+    status: q.status || 'draft',
+    created_at: iso(q.created_at),
+    updated_at: iso(q.updated_at),
+    ...quoteTotals(q.items, q.tax_rate),
+  };
+}
+
+app.get(
+  '/api/admin/quotes',
+  requireQuotes,
+  wrap(async (req, res) => {
+    const rows = await store.quotes.find({}, { sort: { created_at: -1 } }).toArray();
+    res.json(rows.map(quoteView));
+  })
+);
+
+app.get(
+  '/api/admin/quotes/:id',
+  requireQuotes,
+  wrap(async (req, res) => {
+    const q = await store.quotes.findOne({ _id: Number(req.params.id) });
+    if (!q) return res.status(404).json({ error: 'Quote not found.' });
+    res.json(quoteView(q));
+  })
+);
+
+app.post(
+  '/api/admin/quotes',
+  requireQuotes,
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const customer = cleanCustomer(b.customer);
+    if (!customer.name) return res.status(400).json({ error: 'Customer name is required.' });
+
+    const _id = await store.nextId('quotes');
+    const now = new Date();
+    const doc = {
+      _id,
+      number: 'Q' + String(1000 + _id),
+      customer,
+      quote_date: b.quote_date ? new Date(b.quote_date) : now,
+      items: cleanItems(b.items),
+      tax_rate: toNum(b.tax_rate),
+      notes: String(b.notes || '').trim(),
+      status: QUOTE_STATUSES.has(b.status) ? b.status : 'draft',
+      created_at: now,
+      updated_at: now,
+    };
+    await store.quotes.insertOne(doc);
+    res.json(quoteView(doc));
+  })
+);
+
+app.patch(
+  '/api/admin/quotes/:id',
+  requireQuotes,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const q = await store.quotes.findOne({ _id: id });
+    if (!q) return res.status(404).json({ error: 'Quote not found.' });
+
+    const b = req.body || {};
+    const set = { updated_at: new Date() };
+    if (b.customer != null) set.customer = cleanCustomer(b.customer);
+    if (b.items != null) set.items = cleanItems(b.items);
+    if (b.tax_rate != null) set.tax_rate = toNum(b.tax_rate);
+    if (b.notes != null) set.notes = String(b.notes).trim();
+    if (b.quote_date != null && b.quote_date) set.quote_date = new Date(b.quote_date);
+    if (b.status != null && QUOTE_STATUSES.has(b.status)) set.status = b.status;
+
+    const name = (set.customer ? set.customer.name : q.customer && q.customer.name) || '';
+    if (!name) return res.status(400).json({ error: 'Customer name is required.' });
+
+    await store.quotes.updateOne({ _id: id }, { $set: set });
+    const updated = await store.quotes.findOne({ _id: id });
+    res.json(quoteView(updated));
+  })
+);
+
+app.delete(
+  '/api/admin/quotes/:id',
+  requireQuotes,
+  wrap(async (req, res) => {
+    await store.quotes.deleteOne({ _id: Number(req.params.id) });
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Static pages
 // ---------------------------------------------------------------------------
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Shared PIN clock-in page. Served explicitly (not just as /timeclock.html) so
+// the clean "/timeclock" URL works on hosts that route everything through this
+// app (e.g. Vercel). "/" is the employee login/portal, served by static above.
+app.get('/timeclock', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'timeclock.html'));
+});
+
+// Old admin URLs now live behind the main-page login — send any stale bookmarks
+// to the login page instead of 404ing.
+for (const legacy of ['/fence', '/office']) {
+  if (legacy !== ADMIN_PATH) app.get(legacy, (req, res) => res.redirect('/'));
+}
 
 // Admin page is served from /views (outside the static folder) at ADMIN_PATH,
 // so it is not reachable at a guessable /admin or /admin.html URL.
@@ -718,10 +1491,12 @@ if (require.main === module) {
   });
 
   connect()
-    .then(() => {
+    .then(async () => {
+      await getDevRecord().catch(() => {}); // ensure the dev account exists in the DB
       app.listen(PORT, () => {
         console.log(`HEK Timeclock running on http://localhost:${PORT}`);
-        console.log(`  Employee clock-in:  http://localhost:${PORT}/`);
+        console.log(`  Employee login:     http://localhost:${PORT}/`);
+        console.log(`  Shared PIN clock:   http://localhost:${PORT}/timeclock`);
         console.log(`  Admin dashboard:    http://localhost:${PORT}${ADMIN_PATH}`);
       });
     })

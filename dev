@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# dev — get a developer up and running with a single command.
+#
+#     ./dev
+#
+# What it does, in order:
+#   1. Install dependencies  (Composer if this project uses it, then npm)
+#   2. Run the test suite     (if a "test" script is defined)
+#   3. Start the dev server:  npm run dev   (node --watch server.js)
+#
+# Re-runnable and safe: any step that doesn't apply is skipped with a note,
+# so this same script keeps working as the project grows.
+
+set -euo pipefail
+
+# Always run from the project root, no matter where ./dev was called from.
+cd "$(dirname "$0")"
+
+# True when package.json defines the given npm script.
+has_npm_script() {
+  node -e "process.exit((require('./package.json').scripts||{})['$1']?0:1)" 2>/dev/null
+}
+
+echo "==> Installing dependencies"
+
+# PHP / Composer dependencies — only if this project actually uses Composer.
+if [ -f composer.json ]; then
+  if command -v composer >/dev/null 2>&1; then
+    composer install
+  else
+    echo "    composer.json found but Composer isn't installed — skipping."
+    echo "    Get it from https://getcomposer.org, then re-run ./dev."
+  fi
+else
+  echo "    (no composer.json — Node-only project, skipping Composer)"
+fi
+
+# Node dependencies.
+npm install
+
+echo
+echo "==> Running tests"
+if has_npm_script test; then
+  # Don't let a failing test block the dev server — report it and carry on.
+  npm test || echo "    tests failed — starting the dev server anyway"
+else
+  echo "    (no \"test\" script in package.json yet — skipping)"
+fi
+
+echo
+echo "==> Starting dev server: npm run dev"
+exec npm run dev
