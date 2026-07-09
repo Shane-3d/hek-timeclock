@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0d0d0d" />
+    <!-- Set the saved theme before first paint so there is no flash. -->
+    <script>
+      try { document.documentElement.dataset.theme = localStorage.getItem('hek-theme') || 'system'; }
+      catch (e) { document.documentElement.dataset.theme = 'system'; }
+    </script>
     <title>HEK Fencing — Admin</title>
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/png" href="/icon-192.png" />
@@ -35,15 +40,56 @@
 
     <!-- Dashboard -->
     <div id="app" style="display:none">
+      <!-- Mobile-only top bar: hamburger opens the popout menu -->
+      <header class="mobile-bar">
+        <button class="hamburger" id="menuToggle" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+          <span></span><span></span><span></span>
+        </button>
+        <div class="mobile-brand">HEK <small>TIMECLOCK</small></div>
+      </header>
+
       <div class="admin-layout">
-        <aside class="sidebar">
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+        <aside class="sidebar" id="sidebar">
           <div class="side-brand">HEK <small>TIMECLOCK</small></div>
           <nav class="side-nav">
             <div class="tab active" data-tab="live">On the clock</div>
             <div class="tab" data-tab="sheets">Timesheets</div>
+            <div class="tab" data-tab="schedule">Schedule</div>
+            <div class="tab" data-tab="pricing">Pricing</div>
+            <div class="tab" data-tab="quotes">Quotes</div>
             <div class="tab" data-tab="employees">Employees</div>
+            <div class="tab" data-tab="access" id="devAccessTab" style="display:none">Client access</div>
           </nav>
-          <button class="btn ghost sm" id="logoutBtn">Sign out</button>
+
+          <!-- Signed-in user + settings (gear opens theme + sign out) -->
+          <div class="user-area">
+            <div class="settings-menu" id="settingsMenu" style="display:none">
+              <div class="menu-label">Theme</div>
+              <div class="theme-toggle" role="group" aria-label="Color theme">
+                <button type="button" data-theme-choice="system" title="Match system" aria-label="System theme">◐</button>
+                <button type="button" data-theme-choice="light" title="Light" aria-label="Light theme">☀</button>
+                <button type="button" data-theme-choice="dark" title="Dark" aria-label="Dark theme">☾</button>
+              </div>
+
+              <div class="menu-label" style="margin-top:14px">Admin login</div>
+              <input id="acEmail" type="email" autocomplete="username" autocapitalize="none" autocorrect="off"
+                     spellcheck="false" placeholder="admin email" style="width:100%;margin-bottom:8px" />
+              <input id="acPass" type="password" autocomplete="new-password" placeholder="new password (optional)"
+                     style="width:100%;margin-bottom:8px" />
+              <button class="btn gold sm" id="acSave" style="width:100%">Save login</button>
+              <div class="msg" id="acMsg" style="min-height:0;margin:8px 0 0;font-size:13px"></div>
+
+              <button class="btn ghost sm" id="logoutBtn" style="margin-top:12px">Sign out</button>
+            </div>
+            <div class="user-bar">
+              <div class="user-id">
+                <span class="avatar" id="userAvatar">A</span>
+                <span class="user-email" id="userEmail">admin</span>
+              </div>
+              <button class="gear-btn" id="settingsGear" title="Settings" aria-label="Settings" aria-expanded="false">⚙</button>
+            </div>
+          </div>
         </aside>
         <main class="main">
 
@@ -80,12 +126,139 @@
           </div>
           <div class="card">
             <table>
-              <thead><tr><th>Employee</th><th>Clock In</th><th>Clock Out</th><th>Hours</th><th>Work done</th><th></th></tr></thead>
+              <thead><tr><th>Employee</th><th>Clock In</th><th>Clock Out</th><th>Hours</th><th>Work done</th></tr></thead>
               <tbody id="tsBody"></tbody>
             </table>
             <p class="status-sub" id="tsEmpty" style="display:none">No entries for this range.</p>
           </div>
         </section>
+
+        <!-- QUOTES -->
+        <section class="section" id="tab-quotes">
+          <!-- List of saved quotes -->
+          <div id="qList">
+            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:16px">
+              <h2 style="margin:0">Quotes</h2>
+              <button class="btn gold sm" id="qNew">+ New quote</button>
+            </div>
+            <div class="card">
+              <table>
+                <thead><tr><th>#</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead>
+                <tbody id="qBody"></tbody>
+              </table>
+              <p class="status-sub" id="qEmpty" style="display:none">No quotes yet. Click “New quote” to make one.</p>
+            </div>
+          </div>
+
+          <!-- Quote builder -->
+          <div id="qEditor" style="display:none">
+            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:16px">
+              <h2 style="margin:0" id="qEditorTitle">New quote</h2>
+              <button class="btn ghost sm" id="qBack">← Back to list</button>
+            </div>
+
+            <div class="card" style="margin-bottom:16px">
+              <h3 style="margin-top:0">Customer</h3>
+              <div class="row">
+                <div class="field" style="flex:2 1 220px"><label>Name *</label><input id="qcName" placeholder="Jane Doe" /></div>
+                <div class="field" style="flex:1 1 160px"><label>Phone</label><input id="qcPhone" placeholder="(555) 123-4567" /></div>
+                <div class="field" style="flex:2 1 220px"><label>Email</label><input id="qcEmail" placeholder="jane@email.com" /></div>
+              </div>
+              <div class="row" style="margin-top:12px">
+                <div class="field" style="flex:3 1 320px"><label>Job site / address</label><input id="qcAddress" placeholder="123 Maple St" /></div>
+                <div class="field" style="flex:1 1 140px"><label>Quote date</label><input type="date" id="qDate" /></div>
+                <div class="field" style="flex:1 1 140px"><label>Status</label>
+                  <select id="qStatus">
+                    <option value="draft">Draft</option>
+                    <option value="sent">Sent</option>
+                    <option value="accepted">Accepted</option>
+                    <option value="declined">Declined</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-bottom:16px">
+              <h3 style="margin-top:0">Line items</h3>
+              <p class="status-sub" style="text-align:left;margin:-6px 0 12px">Quick add:</p>
+              <div class="quick-adds" id="qQuick"></div>
+              <div style="overflow-x:auto">
+                <table class="items-table">
+                  <thead><tr>
+                    <th style="min-width:200px">Description</th>
+                    <th style="width:80px">Qty</th>
+                    <th style="width:110px">Unit</th>
+                    <th style="width:120px">Unit price</th>
+                    <th style="width:110px">Line total</th>
+                    <th style="width:36px"></th>
+                  </tr></thead>
+                  <tbody id="qItems"></tbody>
+                </table>
+              </div>
+              <button class="btn ghost sm" id="qAddRow" style="margin-top:12px">+ Add line</button>
+            </div>
+
+            <div class="row" style="align-items:stretch">
+              <div class="card" style="flex:2 1 320px">
+                <label for="qNotes">Notes / terms (shown on the quote)</label>
+                <textarea id="qNotes" rows="5" placeholder="e.g. 50% deposit due on acceptance. Balance on completion. Quote valid for 30 days."></textarea>
+              </div>
+              <div class="card" style="flex:1 1 240px">
+                <div class="totals-line"><span>Subtotal</span><span id="qSubtotal">$0.00</span></div>
+                <div class="totals-line">
+                  <span>Tax <input id="qTax" class="tax-input" inputmode="decimal" value="0" /> %</span>
+                  <span id="qTaxAmt">$0.00</span>
+                </div>
+                <div class="totals-line grand"><span>Total</span><span id="qTotal">$0.00</span></div>
+              </div>
+            </div>
+
+            <div class="msg err" id="qMsg"></div>
+            <div class="row" style="justify-content:flex-end;margin-top:12px">
+              <button class="btn ghost sm" id="qPrint">Print / PDF</button>
+              <button class="btn gold sm" id="qSave">Save quote</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHEDULE (jobs: address + description assigned to employees) -->
+        <section class="section" id="tab-schedule">
+          <div class="card" id="schedForm" style="margin-bottom:16px">
+            <h3 style="margin-top:0" id="schedFormTitle">Add job</h3>
+            <div class="row">
+              <div class="field" style="flex:3 1 320px;position:relative">
+                <label>Address (start typing, then pick a match)</label>
+                <input id="schedAddr" autocomplete="off" placeholder="123 Maple St, Springfield" />
+                <div class="addr-suggest" id="schedSuggest" style="display:none"></div>
+              </div>
+              <div class="field" style="flex:1 1 150px"><label>Date</label><input type="date" id="schedDate" /></div>
+              <div class="field" style="flex:1 1 120px"><label>Time</label><input type="time" id="schedTime" /></div>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <label>Description (what's the job?)</label>
+              <textarea id="schedDesc" rows="2" placeholder="e.g. install 150ft cedar privacy fence, back yard"></textarea>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <label>Assign to employees</label>
+              <div class="perm-list" id="schedEmps"></div>
+            </div>
+            <div class="row" style="margin-top:12px;align-items:center">
+              <button class="btn gold sm" id="schedSave">Add job</button>
+              <button class="btn ghost sm" id="schedCancel" style="display:none">Cancel edit</button>
+            </div>
+            <div class="msg err" id="schedMsg"></div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>When</th><th>Address</th><th>Description</th><th>Assigned</th><th></th></tr></thead>
+              <tbody id="schedBody"></tbody>
+            </table>
+            <p class="status-sub" id="schedEmpty" style="display:none">No jobs scheduled yet.</p>
+          </div>
+        </section>
+
+        <!-- PRICING (the calculator UI is rendered by pricing.js) -->
+        <section class="section" id="tab-pricing"></section>
 
         <!-- EMPLOYEES -->
         <section class="section" id="tab-employees">
@@ -94,15 +267,34 @@
             <div class="row">
               <div class="field"><label>Name</label><input id="newName" placeholder="Jane Doe" /></div>
               <div class="field"><label>4-digit PIN</label><input id="newPin" inputmode="numeric" maxlength="4" placeholder="1234" /></div>
-              <button class="btn gold sm" id="addEmp">Add</button>
+              <div class="field"><label>Login email (optional)</label><input id="newEmail" type="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="jane@hekfencing.com" /></div>
+              <div class="field"><label>Password (optional)</label><input id="newPass" type="text" placeholder="set a password" /></div>
             </div>
+            <div class="field" style="margin-top:12px">
+              <label>Access (extra features once they log in — hours is always on)</label>
+              <div class="perm-list" id="newPerms"></div>
+            </div>
+            <div class="row" style="margin-top:12px"><button class="btn gold sm" id="addEmp">Add</button></div>
             <div class="msg err" id="empMsg"></div>
           </div>
           <div class="card">
             <table>
-              <thead><tr><th>Name</th><th>PIN</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Name</th><th>PIN</th><th>Login email</th><th>Access</th><th>Status</th><th></th></tr></thead>
               <tbody id="empBody"></tbody>
             </table>
+          </div>
+        </section>
+
+        <!-- CLIENT ACCESS (dev only) -->
+        <section class="section" id="tab-access">
+          <div class="card">
+            <h3 style="margin-top:0">Client access</h3>
+            <p class="status-sub" style="text-align:left;margin-top:0">
+              Turn features on or off for the client. Turning one off removes it from
+              their dashboard right away and blocks it — use it if they haven't paid.
+            </p>
+            <div id="featureToggles"></div>
+            <div class="msg" id="featMsg"></div>
           </div>
         </section>
         </main>
@@ -138,6 +330,30 @@
       </div>
     </div>
 
+    <!-- Employee account modal (login email, password, permissions) -->
+    <div class="modal-back" id="empModalBack">
+      <div class="modal">
+        <h3 id="empModalTitle">Employee account</h3>
+        <div class="row"><div class="field" style="flex:1"><label>Login email</label>
+          <input id="eaEmail" type="email" autocapitalize="none" autocorrect="off" spellcheck="false"
+                 style="width:100%" placeholder="jane@hekfencing.com" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>New password (leave blank to keep current)</label>
+          <input id="eaPass" type="text" style="width:100%" placeholder="set a new password" /></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>Access (hours is always on)</label>
+          <div class="perm-list" id="eaPerms"></div></div></div>
+        <div class="msg err" id="empModalMsg"></div>
+        <div class="row" style="justify-content:flex-end;margin-top:8px">
+          <button class="btn ghost sm" id="eaCancel">Cancel</button>
+          <button class="btn gold sm" id="eaSave">Save</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/admin.js"></script>
+    <script src="/quotes.js"></script>
+    <script src="/pricing.js"></script>
+    <script src="/schedule.js"></script>
+    <script src="/account.js"></script>
+    <script src="/theme.js"></script>
   </body>
 </html>

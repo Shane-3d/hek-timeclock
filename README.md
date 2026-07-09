@@ -9,12 +9,14 @@ A simple employee time clock:
 
 | URL | Who | What |
 | --- | --- | --- |
-| `/` | Employees | Enter PIN → Clock In / Clock Out |
-| `/office` | Admin | Dashboard (password protected) |
+| `/` | Everyone | Sign in with email + password → employee portal, or (admin) the dashboard |
+| `/timeclock` | Crew | Shared 4-digit PIN clock (in / out) for a shop tablet |
+| `/admin` | Admin | Dashboard — reached automatically after an admin signs in on `/` |
 
-> The admin dashboard is **not** at `/admin` and is **not** linked from the
-> employee page, so the crew never sees it. The path defaults to `/office` — set
-> the `ADMIN_PATH` env var to change it to something only you know. Bookmark it.
+> Everyone signs in on the main page (`/`). Employees land on a portal that always
+> shows their own hours (plus any features the admin grants them); admins are
+> redirected to the dashboard at `ADMIN_PATH` (default `/admin`). The shared PIN
+> keypad for punching in on one device lives at `/timeclock`.
 
 ## Admin dashboard
 
@@ -53,7 +55,8 @@ $env:ADMIN_PASSWORD="yourpassword"
 npm start
 ```
 
-Open http://localhost:3000 (clock-in) and http://localhost:3000/office (dashboard).
+Open http://localhost:3000 (sign in) — admins are taken to the dashboard, and the
+shared PIN clock is at http://localhost:3000/timeclock.
 The first thing to do after signing in is add your employees under the **Employees** tab.
 
 ## Deploy to Netlify
@@ -69,10 +72,10 @@ and the API runs as a serverless function.
    - `ADMIN_EMAIL` — admin sign-in email
    - `ADMIN_PASSWORD` — admin sign-in password
    - `SESSION_SECRET` — a long random string
-   - `ADMIN_PATH` — the admin page path, e.g. `/fence` (also sets the page filename)
+   - `ADMIN_PATH` — the admin page path (default `/admin`; also sets the page filename)
    - `TIMEZONE` — e.g. `America/New_York`
 4. Deploy. Netlify gives you a public `https://…netlify.app` URL — share `/` with
-   the crew and bookmark your admin path (e.g. `/fence`).
+   the crew (they sign in there); admins are routed to the dashboard automatically.
 
 > **Atlas network access:** In Atlas → **Network Access**, add `0.0.0.0/0` (allow
 > from anywhere) so Netlify's servers can reach the cluster, otherwise the API
@@ -93,7 +96,7 @@ Render pick **New + → Blueprint** and set the same environment variables above
 | `ADMIN_EMAIL` | Email admins sign in with (default `admin@hekfencing.com`). |
 | `ADMIN_PASSWORD` | Password for the admin dashboard. **Set this.** |
 | `SESSION_SECRET` | Random string signing the login cookie. |
-| `ADMIN_PATH` | URL path for the admin dashboard (default `/office`). |
+| `ADMIN_PATH` | URL path for the admin dashboard (default `/admin`). |
 | `TIMEZONE` | IANA timezone for the workday boundary (default `America/New_York`). |
 | `PORT` | Port to listen on (host usually sets this). |
 

@@ -3,6 +3,8 @@
   const $ = (id) => document.getElementById(id);
   let employees = [];
   let liveTimer = null;
+  let isDev = false; // the limited-admin "dev" account (no clock-in features)
+  let currentFeatures = null; // which paid features the dev has enabled for the client
 
   // ---- API helper ----
   async function api(path, opts = {}) {
@@ -46,15 +48,99 @@
 
   // ---- Auth ----
   function showLogin() {
-    $('app').style.display = 'none';
-    $('loginView').style.display = 'block';
     if (liveTimer) clearInterval(liveTimer);
+    // Admins sign in on the main page ("/") now — send visitors without a valid
+    // admin session there rather than showing a second login form here.
+    window.location.replace('/');
   }
   function showApp() {
     $('loginView').style.display = 'none';
     $('app').style.display = 'block';
+    loadPermissions();
     loadEmployees();
-    showLive();
+    if (isDev) applyDevRestrictions();
+    else {
+      applyEntitlements(currentFeatures);
+      showLive();
+    }
+  }
+
+  // Show/hide a sidebar tab (and drop its "active" if we're hiding it).
+  function setTabVisible(name, visible) {
+    const tab = document.querySelector('.side-nav .tab[data-tab="' + name + '"]');
+    if (tab) tab.style.display = visible ? '' : 'none';
+    if (!visible) {
+      const sec = $('tab-' + name);
+      if (sec) sec.classList.remove('active');
+    }
+  }
+
+  // For the real admin: hide any paid feature the dev has switched off.
+  function applyEntitlements(features) {
+    if (!features) return;
+    ['quotes', 'schedule', 'pricing'].forEach((key) => {
+      if (features[key] === false) setTabVisible(key, false);
+    });
+  }
+
+  // The "dev" account is a limited admin: hide the clock-in features it can't use,
+  // and reveal the "Client access" panel where it controls the client's features.
+  function applyDevRestrictions() {
+    if (liveTimer) clearInterval(liveTimer);
+    ['live', 'sheets'].forEach((t) => setTabVisible(t, false));
+    const devTab = $('devAccessTab');
+    if (devTab) devTab.style.display = '';
+    // Dev can't change the admin's own login — hide that editor.
+    ['acEmail', 'acPass', 'acSave', 'acMsg'].forEach((id) => {
+      const el = $(id);
+      if (el) el.style.display = 'none';
+    });
+    const acLabel = [...document.querySelectorAll('.menu-label')].find((l) =>
+      /admin login/i.test(l.textContent)
+    );
+    if (acLabel) acLabel.style.display = 'none';
+    // Label the signed-in account and open the first available tab.
+    const ue = $('userEmail');
+    if (ue) ue.textContent = 'dev';
+    const av = $('userAvatar');
+    if (av) av.textContent = 'D';
+    const firstTab = [...document.querySelectorAll('.side-nav .tab')].find(
+      (t) => t.style.display !== 'none'
+    );
+    if (firstTab) firstTab.click();
+  }
+
+  // ---- Client access (dev only): toggle which features the client can use ----
+  async function loadDevFeatures() {
+    const d = await api('/api/dev/features');
+    $('featMsg').textContent = '';
+    $('featureToggles').innerHTML = d.features
+      .map(
+        (f) => `<label class="feature-row">
+          <span>${esc(f.label)}</span>
+          <input type="checkbox" data-feat="${f.key}" ${f.enabled ? 'checked' : ''} />
+        </label>`
+      )
+      .join('');
+  }
+  const featEl = $('featureToggles');
+  if (featEl) {
+    featEl.addEventListener('change', async (e) => {
+      const cb = e.target.closest('input[data-feat]');
+      if (!cb) return;
+      try {
+        await api('/api/dev/features', {
+          method: 'PATCH',
+          body: JSON.stringify({ [cb.dataset.feat]: cb.checked }),
+        });
+        $('featMsg').className = 'msg ok';
+        $('featMsg').textContent = 'Saved.';
+      } catch (err) {
+        cb.checked = !cb.checked; // revert on failure
+        $('featMsg').className = 'msg err';
+        $('featMsg').textContent = err.message;
+      }
+    });
   }
 
   $('loginBtn').addEventListener('click', doLogin);
@@ -63,11 +149,14 @@
   async function doLogin() {
     $('loginMsg').textContent = '';
     try {
-      await api('/api/admin/login', {
+      const r = await api('/api/admin/login', {
         method: 'POST',
         body: JSON.stringify({ email: $('email').value, password: $('pw').value }),
       });
       $('pw').value = '';
+      isDev = !!(r && r.role === 'dev');
+      const me = await api('/api/admin/me').catch(() => ({}));
+      currentFeatures = me.features || null;
       showApp();
     } catch (e) {
       $('loginMsg').textContent = e.message;
@@ -77,6 +166,18 @@
     await api('/api/admin/logout', { method: 'POST' }).catch(() => {});
     showLogin();
   });
+
+  // ---- Mobile popout menu ----
+  function setMenu(open) {
+    $('sidebar').classList.toggle('open', open);
+    $('sidebarBackdrop').classList.toggle('open', open);
+    $('menuToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  $('menuToggle').addEventListener('click', () =>
+    setMenu(!$('sidebar').classList.contains('open'))
+  );
+  $('sidebarBackdrop').addEventListener('click', () => setMenu(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
 
   // ---- Tabs ----
   document.querySelectorAll('.tab').forEach((t) => {
@@ -88,6 +189,11 @@
       if (t.dataset.tab === 'live') showLive();
       if (t.dataset.tab === 'employees') loadEmployees();
       if (t.dataset.tab === 'sheets') loadTimesheet().catch((e) => alert(e.message));
+      if (t.dataset.tab === 'quotes' && window.Quotes) window.Quotes.load();
+      if (t.dataset.tab === 'schedule' && window.Schedule)
+        window.Schedule.loadAdmin().catch((e) => alert(e.message));
+      if (t.dataset.tab === 'access') loadDevFeatures().catch((e) => alert(e.message));
+      setMenu(false); // close the popout after choosing a tab
     });
   });
 
@@ -121,6 +227,41 @@
   }
 
   // ---- Employees ----
+  // Permission keys come from the server; labels are friendly names for the UI.
+  const PERM_LABELS = { quotes: 'Quotes / estimates' };
+  let permKeys = [];
+
+  async function loadPermissions() {
+    try {
+      const d = await api('/api/admin/permissions');
+      permKeys = d.permissions || [];
+    } catch (e) {
+      permKeys = [];
+    }
+    renderPermChecks($('newPerms'), []);
+  }
+
+  // Render permission checkboxes into a container, checking those in `selected`.
+  function renderPermChecks(container, selected) {
+    const sel = new Set(selected || []);
+    container.innerHTML = permKeys.length
+      ? permKeys
+          .map(
+            (k) =>
+              `<label class="perm"><input type="checkbox" value="${k}"${
+                sel.has(k) ? ' checked' : ''
+              } /> ${esc(PERM_LABELS[k] || k)}</label>`
+          )
+          .join('')
+      : '<span style="color:var(--muted);font-size:13px">No optional features yet.</span>';
+  }
+  const collectPerms = (container) =>
+    [...container.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
+  const permSummary = (perms) =>
+    perms && perms.length
+      ? perms.map((k) => esc(PERM_LABELS[k] || k)).join(', ')
+      : '<span style="color:var(--muted)">Hours only</span>';
+
   async function loadEmployees() {
     employees = await api('/api/admin/employees');
     // populate selects
@@ -134,11 +275,19 @@
 
     $('empBody').innerHTML = employees
       .map(
-        (e) => `<tr>
+        (e) => `<tr class="clickable-row" data-id="${e.id}" title="Click to edit this employee's account">
           <td>${esc(e.name)}</td>
           <td>${e.pin}</td>
+          <td>${
+            e.email ? esc(e.email) : '<span style="color:var(--muted)">—</span>'
+          }${
+            e.email && !e.hasPassword
+              ? '<div style="font-size:12px;color:var(--red)">no password set</div>'
+              : ''
+          }</td>
+          <td>${permSummary(e.permissions)}</td>
           <td>${e.active ? '<span class="badge on">Active</span>' : '<span class="badge">Inactive</span>'}</td>
-          <td style="text-align:right">
+          <td style="text-align:right;white-space:nowrap">
             <button class="link-btn" data-act="pin" data-id="${e.id}">Reset PIN</button>
             <button class="link-btn" data-act="toggle" data-id="${e.id}">${e.active ? 'Deactivate' : 'Activate'}</button>
             <button class="link-btn danger" data-act="del" data-id="${e.id}">Delete</button>
@@ -149,7 +298,14 @@
 
   $('empBody').addEventListener('click', async (ev) => {
     const btn = ev.target.closest('button');
-    if (!btn) return;
+    // Clicking anywhere else on the row opens that employee's account editor.
+    if (!btn) {
+      const row = ev.target.closest('tr[data-id]');
+      if (!row) return;
+      const emp = employees.find((e) => e.id === Number(row.dataset.id));
+      if (emp) openEmpModal(emp);
+      return;
+    }
     const id = Number(btn.dataset.id);
     const emp = employees.find((e) => e.id === id);
     try {
@@ -180,13 +336,57 @@
     try {
       await api('/api/admin/employees', {
         method: 'POST',
-        body: JSON.stringify({ name: $('newName').value, pin: $('newPin').value }),
+        body: JSON.stringify({
+          name: $('newName').value,
+          pin: $('newPin').value,
+          email: $('newEmail').value,
+          password: $('newPass').value,
+          permissions: collectPerms($('newPerms')),
+        }),
       });
       $('newName').value = '';
       $('newPin').value = '';
+      $('newEmail').value = '';
+      $('newPass').value = '';
+      renderPermChecks($('newPerms'), []);
       loadEmployees();
     } catch (e) {
       $('empMsg').textContent = e.message;
+    }
+  });
+
+  // ---- Employee account modal (login email / password / permissions) ----
+  let empModalId = null;
+  function openEmpModal(emp) {
+    empModalId = emp.id;
+    $('empModalTitle').textContent = 'Account — ' + emp.name;
+    $('eaEmail').value = emp.email || '';
+    $('eaPass').value = '';
+    renderPermChecks($('eaPerms'), emp.permissions || []);
+    $('empModalMsg').textContent = '';
+    $('empModalBack').classList.add('open');
+  }
+  $('eaCancel').addEventListener('click', () => $('empModalBack').classList.remove('open'));
+  $('empModalBack').addEventListener('click', (e) => {
+    if (e.target === $('empModalBack')) $('empModalBack').classList.remove('open');
+  });
+  $('eaSave').addEventListener('click', async () => {
+    if (!empModalId) return;
+    $('empModalMsg').textContent = '';
+    const payload = {
+      email: $('eaEmail').value.trim(),
+      permissions: collectPerms($('eaPerms')),
+    };
+    if ($('eaPass').value) payload.password = $('eaPass').value;
+    try {
+      await api('/api/admin/employees/' + empModalId, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      $('empModalBack').classList.remove('open');
+      loadEmployees();
+    } catch (e) {
+      $('empModalMsg').textContent = e.message;
     }
   });
 
@@ -206,7 +406,7 @@
     $('tsEmpty').style.display = data.entries.length ? 'none' : 'block';
     $('tsBody').innerHTML = data.entries
       .map(
-        (r) => `<tr>
+        (r) => `<tr class="clickable-row" data-punch="${r.id}" title="Click to edit this entry">
           <td>${esc(r.name)}${r.edited ? ' <span class="badge edited">edited</span>' : ''}</td>
           <td>${fmtDateTime(r.clock_in)}</td>
           <td>${r.clock_out ? fmtDateTime(r.clock_out) : '<span class="badge on">on the clock</span>'}</td>
@@ -216,7 +416,6 @@
               ? `<div style="font-size:12px;color:var(--red)">missed: ${esc(r.missed_reason)}</div>`
               : ''
           }</td>
-          <td style="text-align:right"><button class="link-btn" data-punch="${r.id}">Edit</button></td>
         </tr>`
       )
       .join('');
@@ -228,10 +427,9 @@
   });
 
   $('tsBody').addEventListener('click', (ev) => {
-    const btn = ev.target.closest('button[data-punch]');
-    if (!btn) return;
-    const id = Number(btn.dataset.punch);
-    openPunchModal(id);
+    const row = ev.target.closest('tr[data-punch]');
+    if (!row) return;
+    openPunchModal(Number(row.dataset.punch));
   });
 
   // ---- Punch modal (edit + add) ----
@@ -323,6 +521,10 @@
     }[c]));
   }
 
+  // Share the auth-aware API helper (and utilities) with the Quotes module,
+  // which lives in a separate file so this one stays focused on the timeclock.
+  window.HEKAdmin = { api, esc, showLogin };
+
   // ---- boot: default date range = this week, check session ----
   (function initDates() {
     const now = new Date();
@@ -335,6 +537,11 @@
   })();
 
   api('/api/admin/me')
-    .then((d) => (d.admin ? showApp() : showLogin()))
+    .then((d) => {
+      if (!d.admin) return showLogin();
+      isDev = d.role === 'dev';
+      currentFeatures = d.features || null;
+      showApp();
+    })
     .catch(showLogin);
 })();
