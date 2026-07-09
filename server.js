@@ -787,23 +787,42 @@ app.patch(
 // Admin: employees
 // ---------------------------------------------------------------------------
 
+// Extra profile fields on an employee record (shown in the rich editor). Stored
+// as trimmed strings; the UI decides how to present them.
+const PROFILE_FIELDS = [
+  'first_name', 'last_name', 'initials', 'phone',
+  'address1', 'address2', 'city', 'province', 'postal', 'country',
+  'birth_date', 'employment_type', 'vacation_weeks', 'job_title',
+  'start_date', 'termination_date', 'clock_in_method',
+];
+function pickProfile(body) {
+  const out = {};
+  for (const f of PROFILE_FIELDS) if (body && body[f] != null) out[f] = String(body[f]).trim();
+  return out;
+}
+// Shape an employee for the admin UI (never leaks the password hash).
+function employeeView(e) {
+  const v = {
+    id: e._id,
+    name: e.name,
+    pin: e.pin,
+    email: e.email || null,
+    permissions: e.permissions || [],
+    hasPassword: !!e.password_hash,
+    active: e.active,
+    created_at: e.created_at,
+  };
+  for (const f of PROFILE_FIELDS) v[f] = e[f] || '';
+  v.reports_to = e.reports_to || null; // the id of the employee they report to
+  return v;
+}
+
 app.get(
   '/api/admin/employees',
   requireAdmin,
   wrap(async (req, res) => {
     const rows = await store.employees.find({}, { sort: { name: 1 } }).toArray();
-    res.json(
-      rows.map((e) => ({
-        id: e._id,
-        name: e.name,
-        pin: e.pin,
-        email: e.email || null,
-        permissions: e.permissions || [],
-        hasPassword: !!e.password_hash,
-        active: e.active,
-        created_at: e.created_at,
-      }))
-    );
+    res.json(rows.map(employeeView));
   })
 );
 
@@ -817,7 +836,10 @@ app.post(
   '/api/admin/employees',
   requireAdmin,
   wrap(async (req, res) => {
-    const name = (req.body?.name || '').trim();
+    const first = (req.body?.first_name || '').trim();
+    const last = (req.body?.last_name || '').trim();
+    let name = (req.body?.name || '').trim();
+    if (!name) name = [first, last].filter(Boolean).join(' ').trim();
     const pin = (req.body?.pin || '').trim();
     const email = (req.body?.email || '').trim().toLowerCase();
     const password = req.body?.password || '';
@@ -833,6 +855,13 @@ app.post(
       return res.status(409).json({ error: 'That email is already in use.' });
 
     const _id = await store.nextId('employees');
+    // reports_to: the id of another employee (their manager).
+    let reportsTo = null;
+    if (req.body?.reports_to) {
+      reportsTo = Number(req.body.reports_to);
+      if (!Number.isInteger(reportsTo) || reportsTo === _id || !(await store.employees.findOne({ _id: reportsTo })))
+        return res.status(400).json({ error: 'Invalid "reports to" selection.' });
+    }
     const doc = {
       _id,
       name,
@@ -841,10 +870,12 @@ app.post(
       permissions,
       active: true,
       created_at: new Date(),
+      reports_to: reportsTo,
+      ...pickProfile(req.body),
     };
     if (email && password) Object.assign(doc, hashPassword(password));
     await store.employees.insertOne(doc);
-    res.json({ id: _id, name, pin, email: doc.email, permissions, active: true });
+    res.json(employeeView(doc));
   })
 );
 
@@ -856,7 +887,14 @@ app.patch(
     const emp = await store.employees.findOne({ _id: id });
     if (!emp) return res.status(404).json({ error: 'Employee not found.' });
 
-    const name = req.body?.name != null ? String(req.body.name).trim() : emp.name;
+    let name = req.body?.name != null ? String(req.body.name).trim() : emp.name;
+    // If first/last name were edited, recompute the display name from them.
+    if (req.body?.first_name != null || req.body?.last_name != null) {
+      const first = req.body?.first_name != null ? String(req.body.first_name).trim() : emp.first_name || '';
+      const last = req.body?.last_name != null ? String(req.body.last_name).trim() : emp.last_name || '';
+      const combined = [first, last].filter(Boolean).join(' ').trim();
+      if (!req.body?.name && combined) name = combined;
+    }
     const pin = req.body?.pin != null ? String(req.body.pin).trim() : emp.pin;
     const active =
       req.body?.active != null ? !!req.body.active && req.body.active !== 0 : emp.active;
@@ -867,7 +905,7 @@ app.patch(
     if (await store.employees.findOne({ pin, _id: { $ne: id } }))
       return res.status(409).json({ error: 'That PIN is already in use.' });
 
-    const set = { name, pin, active };
+    const set = { name, pin, active, ...pickProfile(req.body) };
 
     // Email: allow setting/changing, or clearing with an empty string.
     if (req.body?.email != null) {
@@ -882,20 +920,26 @@ app.patch(
     // Permissions: replace the whole list when provided.
     if (req.body?.permissions != null) set.permissions = cleanPermissions(req.body.permissions);
 
+    // Reports to: another employee (their manager). "" clears it; can't be self.
+    if (req.body?.reports_to != null) {
+      if (req.body.reports_to === '' || req.body.reports_to === 0) {
+        set.reports_to = null;
+      } else {
+        const rt = Number(req.body.reports_to);
+        if (!Number.isInteger(rt) || rt === id)
+          return res.status(400).json({ error: "An employee can't report to themselves." });
+        if (!(await store.employees.findOne({ _id: rt })))
+          return res.status(400).json({ error: 'Unknown manager.' });
+        set.reports_to = rt;
+      }
+    }
+
     // Password: only when a non-empty new value is supplied.
     if (req.body?.password) Object.assign(set, hashPassword(req.body.password));
 
     await store.employees.updateOne({ _id: id }, { $set: set });
     const updated = await store.employees.findOne({ _id: id });
-    res.json({
-      id,
-      name: updated.name,
-      pin: updated.pin,
-      email: updated.email || null,
-      permissions: updated.permissions || [],
-      hasPassword: !!updated.password_hash,
-      active: updated.active,
-    });
+    res.json(employeeView(updated));
   })
 );
 

@@ -262,27 +262,44 @@
 
         <!-- EMPLOYEES -->
         <section class="section" id="tab-employees">
-          <div class="card" style="margin-bottom:16px">
-            <h3 style="margin-top:0">Add employee</h3>
-            <div class="row">
-              <div class="field"><label>Name</label><input id="newName" placeholder="Jane Doe" /></div>
-              <div class="field"><label>4-digit PIN</label><input id="newPin" inputmode="numeric" maxlength="4" placeholder="1234" /></div>
-              <div class="field"><label>Login email (optional)</label><input id="newEmail" type="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="jane@hekfencing.com" /></div>
-              <div class="field"><label>Password (optional)</label><input id="newPass" type="text" placeholder="set a password" /></div>
-            </div>
-            <div class="field" style="margin-top:12px">
-              <label>Access (extra features once they log in — hours is always on)</label>
-              <div class="perm-list" id="newPerms"></div>
-            </div>
-            <div class="row" style="margin-top:12px"><button class="btn gold sm" id="addEmp">Add</button></div>
-            <div class="msg err" id="empMsg"></div>
+          <h2 style="margin:0 0 14px">Employees</h2>
+          <div class="emp-toolbar">
+            <div class="tb-field"><label>Active</label>
+              <select id="empActive">
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+                <option value="all">All</option>
+              </select></div>
+            <div class="tb-field"><label>Work Location</label><select id="empLoc"><option>All</option></select></div>
+            <div class="tb-field"><label>Employee Team</label><select id="empTeam"><option>All</option></select></div>
+            <div class="tb-field"><label>Employee Group</label><select id="empGroup"><option>All</option></select></div>
+            <div class="tb-field"><label>Employment Type</label>
+              <select id="empType">
+                <option value="">All</option>
+                <option>Full Time</option>
+                <option>Part Time</option>
+                <option>Contract</option>
+                <option>Seasonal</option>
+              </select></div>
+            <div class="tb-field"><label>Reports To</label><select id="empReports"><option>All</option></select></div>
+            <div class="tb-field grow"><label>Search</label><input id="empSearch" placeholder="Search..." /></div>
+            <button class="btn ghost sm" id="empReset">Reset</button>
+            <button class="btn ghost sm icon-btn" id="empExport" title="Export CSV" aria-label="Export CSV">⭳</button>
+            <button class="btn gold sm" id="addEmp">Add</button>
           </div>
-          <div class="card">
-            <table>
-              <thead><tr><th>Name</th><th>PIN</th><th>Login email</th><th>Access</th><th>Status</th><th></th></tr></thead>
+          <div class="card emp-card">
+            <table class="emp-table">
+              <thead><tr>
+                <th class="sortable" data-sort="first_name">First Name</th>
+                <th class="sortable" data-sort="last_name">Last Name</th>
+                <th>Positions</th>
+                <th>Divisions</th>
+              </tr></thead>
               <tbody id="empBody"></tbody>
             </table>
+            <p class="status-sub" id="empEmpty" style="display:none;padding:22px">No employees match these filters.</p>
           </div>
+          <div class="pager" id="empPager"></div>
         </section>
 
         <!-- CLIENT ACCESS (dev only) -->
@@ -330,21 +347,110 @@
       </div>
     </div>
 
-    <!-- Employee account modal (login email, password, permissions) -->
+    <!-- Employee profile editor -->
     <div class="modal-back" id="empModalBack">
-      <div class="modal">
-        <h3 id="empModalTitle">Employee account</h3>
-        <div class="row"><div class="field" style="flex:1"><label>Login email</label>
-          <input id="eaEmail" type="email" autocapitalize="none" autocorrect="off" spellcheck="false"
-                 style="width:100%" placeholder="jane@hekfencing.com" /></div></div>
-        <div class="row"><div class="field" style="flex:1"><label>New password (leave blank to keep current)</label>
-          <input id="eaPass" type="text" style="width:100%" placeholder="set a new password" /></div></div>
-        <div class="row"><div class="field" style="flex:1"><label>Access (hours is always on)</label>
-          <div class="perm-list" id="eaPerms"></div></div></div>
+      <div class="modal profile-modal">
+        <div class="profile-head">
+          <h3 id="empModalTitle">Employee</h3>
+          <button class="btn ghost sm" id="eaClose">Close</button>
+        </div>
+
+        <div class="profile-tabs" id="profileTabs">
+          <button type="button" class="ptab active" data-ptab="general">General</button>
+          <button type="button" class="ptab" data-ptab="user">User</button>
+          <button type="button" class="ptab" data-ptab="safety">Health &amp; Safety</button>
+          <button type="button" class="ptab" data-ptab="benefits">Benefits</button>
+          <button type="button" class="ptab" data-ptab="files">Files</button>
+        </div>
+
+        <div class="profile-body">
+          <!-- GENERAL -->
+          <div class="ppanel active" id="ptab-general">
+            <div class="profile-cols">
+              <div class="pcol">
+                <div class="pcol-head">
+                  <h4>Personal Information</h4>
+                  <label class="switch"><span class="switch-label">Active</span>
+                    <input type="checkbox" id="peActive" checked /><span class="slider"></span></label>
+                </div>
+                <div class="pgrid">
+                  <div class="field"><label>Employee ID</label><input id="peId" disabled /></div>
+                  <div class="field"><label>Initials</label><input id="peInitials" maxlength="4" /></div>
+                  <div class="field wide"><label>Email</label><input id="eaEmail" type="email" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="name@email.com" /></div>
+                  <div class="field"><label>First Name</label><input id="peFirst" /></div>
+                  <div class="field"><label>Last Name</label><input id="peLast" /></div>
+                  <div class="field wide"><label>Address 1</label><input id="peAddr1" /></div>
+                  <div class="field wide"><label>Address 2</label><input id="peAddr2" /></div>
+                  <div class="field"><label>City</label><input id="peCity" /></div>
+                  <div class="field"><label>Province</label><input id="peProvince" /></div>
+                  <div class="field"><label>Postal</label><input id="pePostal" /></div>
+                  <div class="field"><label>Country</label>
+                    <select id="peCountry"><option value="">—</option><option>Canada</option><option>United States</option></select></div>
+                  <div class="field"><label>Phone Number</label><input id="pePhone" /></div>
+                  <div class="field"><label>Birth Date</label><input id="peBirth" type="date" /></div>
+                </div>
+              </div>
+
+              <div class="pcol">
+                <div class="pcol-head"><h4>Profile</h4></div>
+                <div class="pgrid">
+                  <div class="field"><label>Employment Type</label>
+                    <select id="peEmpType"><option value="">—</option><option>Full Time</option><option>Part Time</option><option>Contract</option><option>Seasonal</option></select></div>
+                  <div class="field"><label>Vacation Weeks</label>
+                    <select id="peVacation"><option value="">—</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></div>
+                  <div class="field wide"><label>Job Title</label><input id="peJobTitle" /></div>
+                  <div class="field"><label>Start Date</label><input id="peStart" type="date" /></div>
+                  <div class="field"><label>Termination Date</label><input id="peTerm" type="date" /></div>
+                  <div class="field"><label>Clock In Method</label>
+                    <select id="peClockMethod"><option value="">—</option><option>Timeclock &amp; App</option><option>Timeclock only</option><option>App only</option></select></div>
+                  <div class="field"><label>Pin</label><input id="eaPin" inputmode="numeric" maxlength="4" /></div>
+                  <div class="field wide muted-field"><label>Groups</label><input disabled placeholder="Coming soon" /></div>
+                  <div class="field wide muted-field"><label>Default Team</label><input disabled placeholder="Coming soon" /></div>
+                  <div class="field wide muted-field"><label>Work Location</label><input disabled placeholder="Coming soon" /></div>
+                  <div class="field wide"><label>Reports To</label><select id="peReportsTo"><option value="">— None —</option></select></div>
+                </div>
+              </div>
+
+              <div class="pcol pcol-photo">
+                <div class="photo-box" id="pePhoto" aria-hidden="true">📷</div>
+              </div>
+            </div>
+
+            <!-- Role permissions (what this employee can access after signing in) -->
+            <div class="profile-access">
+              <h4>Role permissions</h4>
+              <p class="status-sub" style="text-align:left;margin:0 0 12px">
+                Extra features this employee can use after they sign in — their own hours is always on.
+              </p>
+              <div class="perm-list" id="eaPerms"></div>
+            </div>
+          </div>
+
+          <!-- USER -->
+          <div class="ppanel" id="ptab-user">
+            <div class="pcol" style="max-width:560px">
+              <div class="pcol-head"><h4>Portal login</h4></div>
+              <p class="status-sub" style="text-align:left;margin-top:0">
+                The employee signs in at <strong>/portal</strong> with the Email (General tab) and this password.
+                Their feature access is set under <strong>Role permissions</strong> on the General tab.
+              </p>
+              <div class="field"><label>New password (leave blank to keep current)</label>
+                <input id="eaPass" type="text" placeholder="set a new password" /></div>
+            </div>
+          </div>
+
+          <div class="ppanel" id="ptab-safety"><div class="empty-tab">Health &amp; Safety records — coming soon.</div></div>
+          <div class="ppanel" id="ptab-benefits"><div class="empty-tab">Benefits — coming soon.</div></div>
+          <div class="ppanel" id="ptab-files"><div class="empty-tab">File attachments — coming soon.</div></div>
+        </div>
+
         <div class="msg err" id="empModalMsg"></div>
-        <div class="row" style="justify-content:flex-end;margin-top:8px">
-          <button class="btn ghost sm" id="eaCancel">Cancel</button>
-          <button class="btn gold sm" id="eaSave">Save</button>
+        <div class="profile-foot">
+          <button class="btn danger-solid sm" id="eaDelete">Delete</button>
+          <div class="foot-right">
+            <button class="btn ghost sm" id="eaMerge">Merge with…</button>
+            <button class="btn gold sm" id="eaSave">Save</button>
+          </div>
         </div>
       </div>
     </div>

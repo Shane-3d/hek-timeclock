@@ -238,7 +238,9 @@
     } catch (e) {
       permKeys = [];
     }
-    renderPermChecks($('newPerms'), []);
+    // The quick-add form was replaced by the profile editor; render only if present.
+    const np = $('newPerms');
+    if (np) renderPermChecks(np, []);
   }
 
   // Render permission checkboxes into a container, checking those in `selected`.
@@ -262,133 +264,282 @@
       ? perms.map((k) => esc(PERM_LABELS[k] || k)).join(', ')
       : '<span style="color:var(--muted)">Hours only</span>';
 
+  // ---- Employees list: filters, sort, pagination ----
+  const EMP_PER_PAGE = 20;
+  let empSort = { key: 'first_name', dir: 1 };
+  let empPage = 1;
+
+  // Fall back to splitting the display name for records made before first/last.
+  const empFirst = (e) => e.first_name || (e.name || '').trim().split(/\s+/)[0] || '';
+  const empLast = (e) =>
+    e.last_name || (e.name || '').trim().split(/\s+/).slice(1).join(' ') || '';
+
   async function loadEmployees() {
     employees = await api('/api/admin/employees');
-    // populate selects
+    // Selects used elsewhere (timesheet filter + punch modal).
     const opts =
       '<option value="">All employees</option>' +
       employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
-    $('tsEmp').innerHTML = opts;
-    $('mEmp').innerHTML = employees
-      .map((e) => `<option value="${e.id}">${esc(e.name)}</option>`)
-      .join('');
-
-    $('empBody').innerHTML = employees
-      .map(
-        (e) => `<tr class="clickable-row" data-id="${e.id}" title="Click to edit this employee's account">
-          <td>${esc(e.name)}</td>
-          <td>${e.pin}</td>
-          <td>${
-            e.email ? esc(e.email) : '<span style="color:var(--muted)">—</span>'
-          }${
-            e.email && !e.hasPassword
-              ? '<div style="font-size:12px;color:var(--red)">no password set</div>'
-              : ''
-          }</td>
-          <td>${permSummary(e.permissions)}</td>
-          <td>${e.active ? '<span class="badge on">Active</span>' : '<span class="badge">Inactive</span>'}</td>
-          <td style="text-align:right;white-space:nowrap">
-            <button class="link-btn" data-act="pin" data-id="${e.id}">Reset PIN</button>
-            <button class="link-btn" data-act="toggle" data-id="${e.id}">${e.active ? 'Deactivate' : 'Activate'}</button>
-            <button class="link-btn danger" data-act="del" data-id="${e.id}">Delete</button>
-          </td></tr>`
-      )
-      .join('');
+    if ($('tsEmp')) $('tsEmp').innerHTML = opts;
+    if ($('mEmp'))
+      $('mEmp').innerHTML = employees
+        .map((e) => `<option value="${e.id}">${esc(e.name)}</option>`)
+        .join('');
+    // "Reports To" filter = every employee (a possible manager); keep the choice.
+    if ($('empReports')) {
+      const keep = $('empReports').value;
+      $('empReports').innerHTML =
+        '<option value="">All</option>' +
+        employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+      $('empReports').value = keep;
+    }
+    empPage = 1;
+    renderEmployees();
   }
 
-  $('empBody').addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('button');
-    // Clicking anywhere else on the row opens that employee's account editor.
-    if (!btn) {
-      const row = ev.target.closest('tr[data-id]');
-      if (!row) return;
-      const emp = employees.find((e) => e.id === Number(row.dataset.id));
-      if (emp) openEmpModal(emp);
+  function filteredEmployees() {
+    const active = $('empActive') ? $('empActive').value : 'active';
+    const type = $('empType') ? $('empType').value : '';
+    const reportsTo = $('empReports') ? $('empReports').value : '';
+    const q = ($('empSearch') ? $('empSearch').value : '').trim().toLowerCase();
+    const rows = employees.filter((e) => {
+      if (active === 'active' && !e.active) return false;
+      if (active === 'inactive' && e.active) return false;
+      if (type && (e.employment_type || '') !== type) return false;
+      if (reportsTo && String(e.reports_to || '') !== reportsTo) return false;
+      if (q) {
+        const hay = [empFirst(e), empLast(e), e.name, e.email, e.job_title]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const val = (e) => (empSort.key === 'last_name' ? empLast(e) : empFirst(e)).toLowerCase();
+    rows.sort((a, b) => (val(a) < val(b) ? -empSort.dir : val(a) > val(b) ? empSort.dir : 0));
+    return rows;
+  }
+
+  function renderEmployees() {
+    const rows = filteredEmployees();
+    const pages = Math.max(1, Math.ceil(rows.length / EMP_PER_PAGE));
+    if (empPage > pages) empPage = pages;
+    const start = (empPage - 1) * EMP_PER_PAGE;
+    const pageRows = rows.slice(start, start + EMP_PER_PAGE);
+    const dash = '<span style="color:var(--muted)">—</span>';
+
+    if ($('empEmpty')) $('empEmpty').style.display = rows.length ? 'none' : 'block';
+    $('empBody').innerHTML = pageRows
+      .map(
+        (e) => `<tr class="clickable-row" data-id="${e.id}" title="Open ${esc(e.name)}">
+          <td>${esc(empFirst(e)) || dash}${
+            e.active ? '' : ' <span class="badge">inactive</span>'
+          }</td>
+          <td>${esc(empLast(e)) || dash}</td>
+          <td>${e.job_title ? esc(e.job_title) : dash}</td>
+          <td>${dash}</td>
+        </tr>`
+      )
+      .join('');
+
+    document.querySelectorAll('.emp-table th.sortable').forEach((th) => {
+      th.classList.toggle('sort-asc', th.dataset.sort === empSort.key && empSort.dir === 1);
+      th.classList.toggle('sort-desc', th.dataset.sort === empSort.key && empSort.dir === -1);
+    });
+    renderEmpPager(pages);
+  }
+
+  function renderEmpPager(pages) {
+    const el = $('empPager');
+    if (!el) return;
+    if (pages <= 1) {
+      el.innerHTML = '';
       return;
     }
-    const id = Number(btn.dataset.id);
-    const emp = employees.find((e) => e.id === id);
-    try {
-      if (btn.dataset.act === 'del') {
-        if (!confirm(`Delete ${emp.name} and all their time entries?`)) return;
-        await api('/api/admin/employees/' + id, { method: 'DELETE' });
-      } else if (btn.dataset.act === 'toggle') {
-        await api('/api/admin/employees/' + id, {
-          method: 'PATCH',
-          body: JSON.stringify({ active: emp.active ? 0 : 1 }),
-        });
-      } else if (btn.dataset.act === 'pin') {
-        const pin = prompt(`New 4-digit PIN for ${emp.name}:`, emp.pin);
-        if (pin == null) return;
-        await api('/api/admin/employees/' + id, {
-          method: 'PATCH',
-          body: JSON.stringify({ pin: pin.trim() }),
-        });
-      }
-      loadEmployees();
-    } catch (e) {
-      alert(e.message);
-    }
+    let html = `<button class="pg" data-pg="prev"${empPage === 1 ? ' disabled' : ''}>Previous</button>`;
+    for (let p = 1; p <= pages; p++)
+      html += `<button class="pg${p === empPage ? ' active' : ''}" data-pg="${p}">${p}</button>`;
+    html += `<button class="pg" data-pg="next"${empPage === pages ? ' disabled' : ''}>Next</button>`;
+    el.innerHTML = html;
+  }
+
+  // Filter / sort / pager / export / add wiring (guarded — elements may be absent).
+  ['empActive', 'empType', 'empReports'].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener('change', () => { empPage = 1; renderEmployees(); });
+  });
+  if ($('empSearch'))
+    $('empSearch').addEventListener('input', () => { empPage = 1; renderEmployees(); });
+  if ($('empReset'))
+    $('empReset').addEventListener('click', () => {
+      if ($('empActive')) $('empActive').value = 'active';
+      if ($('empType')) $('empType').value = '';
+      if ($('empSearch')) $('empSearch').value = '';
+      ['empLoc', 'empTeam', 'empGroup', 'empReports'].forEach((id) => { if ($(id)) $(id).selectedIndex = 0; });
+      empSort = { key: 'first_name', dir: 1 };
+      empPage = 1;
+      renderEmployees();
+    });
+  document.querySelectorAll('.emp-table th.sortable').forEach((th) =>
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (empSort.key === key) empSort.dir *= -1;
+      else empSort = { key, dir: 1 };
+      renderEmployees();
+    })
+  );
+  if ($('empPager'))
+    $('empPager').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-pg]');
+      if (!b || b.disabled) return;
+      const pages = Math.max(1, Math.ceil(filteredEmployees().length / EMP_PER_PAGE));
+      if (b.dataset.pg === 'prev') empPage = Math.max(1, empPage - 1);
+      else if (b.dataset.pg === 'next') empPage = Math.min(pages, empPage + 1);
+      else empPage = Number(b.dataset.pg);
+      renderEmployees();
+    });
+  if ($('empExport'))
+    $('empExport').addEventListener('click', () => {
+      const cell = (v) => {
+        const s = String(v == null ? '' : v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const lines = [['First Name', 'Last Name', 'Position', 'Email', 'PIN', 'Active'].join(',')];
+      filteredEmployees().forEach((e) =>
+        lines.push(
+          [empFirst(e), empLast(e), e.job_title || '', e.email || '', e.pin || '', e.active ? 'yes' : 'no']
+            .map(cell)
+            .join(',')
+        )
+      );
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+      a.download = 'employees.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+  // Clicking a row opens that employee's full profile editor.
+  $('empBody').addEventListener('click', (ev) => {
+    const row = ev.target.closest('tr[data-id]');
+    if (!row) return;
+    const emp = employees.find((e) => e.id === Number(row.dataset.id));
+    if (emp) openEmpModal(emp);
   });
 
-  $('addEmp').addEventListener('click', async () => {
-    $('empMsg').textContent = '';
-    try {
-      await api('/api/admin/employees', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: $('newName').value,
-          pin: $('newPin').value,
-          email: $('newEmail').value,
-          password: $('newPass').value,
-          permissions: collectPerms($('newPerms')),
-        }),
-      });
-      $('newName').value = '';
-      $('newPin').value = '';
-      $('newEmail').value = '';
-      $('newPass').value = '';
-      renderPermChecks($('newPerms'), []);
-      loadEmployees();
-    } catch (e) {
-      $('empMsg').textContent = e.message;
-    }
-  });
+  // "Add" opens the full profile editor in new-employee mode.
+  $('addEmp').addEventListener('click', () => openEmpModal(null));
 
-  // ---- Employee account modal (login email / password / permissions) ----
+  // ---- Employee profile editor ----
   let empModalId = null;
+  const PROFILE_FIELDS = [
+    'first_name', 'last_name', 'initials', 'phone',
+    'address1', 'address2', 'city', 'province', 'postal', 'country',
+    'birth_date', 'employment_type', 'vacation_weeks', 'job_title',
+    'start_date', 'termination_date', 'clock_in_method',
+  ];
+  // Profile field key -> the input/select element id in the editor.
+  const PF = {
+    first_name: 'peFirst', last_name: 'peLast', initials: 'peInitials', phone: 'pePhone',
+    address1: 'peAddr1', address2: 'peAddr2', city: 'peCity', province: 'peProvince',
+    postal: 'pePostal', country: 'peCountry', birth_date: 'peBirth',
+    employment_type: 'peEmpType', vacation_weeks: 'peVacation', job_title: 'peJobTitle',
+    start_date: 'peStart', termination_date: 'peTerm', clock_in_method: 'peClockMethod',
+  };
+
+  function setProfileTab(name) {
+    document.querySelectorAll('.ptab').forEach((t) => t.classList.toggle('active', t.dataset.ptab === name));
+    document.querySelectorAll('.ppanel').forEach((p) => p.classList.remove('active'));
+    const panel = $('ptab-' + name);
+    if (panel) panel.classList.add('active');
+  }
+  document.querySelectorAll('.ptab').forEach((t) =>
+    t.addEventListener('click', () => setProfileTab(t.dataset.ptab))
+  );
+
   function openEmpModal(emp) {
-    empModalId = emp.id;
-    $('empModalTitle').textContent = 'Account — ' + emp.name;
-    $('eaEmail').value = emp.email || '';
+    emp = emp || null;
+    empModalId = emp ? emp.id : null;
+    $('empModalTitle').textContent = emp ? 'General — ' + emp.name : 'New employee';
+    setProfileTab('general');
+    $('peId').value = emp ? emp.id : '';
+    $('eaEmail').value = emp ? emp.email || '' : '';
+    $('eaPin').value = emp ? emp.pin || '' : '';
     $('eaPass').value = '';
-    renderPermChecks($('eaPerms'), emp.permissions || []);
+    $('peActive').checked = emp ? !!emp.active : true;
+    PROFILE_FIELDS.forEach((k) => {
+      const el = $(PF[k]);
+      if (el) el.value = emp ? emp[k] || '' : '';
+    });
+    // Reports To: pick from every other employee (their manager).
+    const rt = $('peReportsTo');
+    if (rt) {
+      const curId = emp ? emp.id : null;
+      rt.innerHTML =
+        '<option value="">— None —</option>' +
+        employees
+          .filter((o) => o.id !== curId)
+          .map((o) => `<option value="${o.id}">${esc(o.name)}</option>`)
+          .join('');
+      rt.value = emp && emp.reports_to ? String(emp.reports_to) : '';
+    }
+    renderPermChecks($('eaPerms'), emp ? emp.permissions || [] : []);
+    // Delete / merge only make sense for an employee that already exists.
+    $('eaDelete').style.display = emp ? '' : 'none';
+    $('eaMerge').style.display = emp ? '' : 'none';
     $('empModalMsg').textContent = '';
     $('empModalBack').classList.add('open');
   }
-  $('eaCancel').addEventListener('click', () => $('empModalBack').classList.remove('open'));
+
+  function closeEmpModal() {
+    $('empModalBack').classList.remove('open');
+  }
+  $('eaClose').addEventListener('click', closeEmpModal);
   $('empModalBack').addEventListener('click', (e) => {
-    if (e.target === $('empModalBack')) $('empModalBack').classList.remove('open');
+    if (e.target === $('empModalBack')) closeEmpModal();
   });
+
   $('eaSave').addEventListener('click', async () => {
-    if (!empModalId) return;
     $('empModalMsg').textContent = '';
     const payload = {
       email: $('eaEmail').value.trim(),
+      pin: $('eaPin').value.trim(),
+      active: $('peActive').checked ? 1 : 0,
       permissions: collectPerms($('eaPerms')),
     };
+    PROFILE_FIELDS.forEach((k) => {
+      const el = $(PF[k]);
+      if (el) payload[k] = el.value;
+    });
+    if ($('peReportsTo')) payload.reports_to = $('peReportsTo').value;
     if ($('eaPass').value) payload.password = $('eaPass').value;
     try {
-      await api('/api/admin/employees/' + empModalId, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
-      $('empModalBack').classList.remove('open');
+      if (empModalId) {
+        await api('/api/admin/employees/' + empModalId, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        await api('/api/admin/employees', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      closeEmpModal();
       loadEmployees();
     } catch (e) {
       $('empModalMsg').textContent = e.message;
     }
   });
+
+  $('eaDelete').addEventListener('click', async () => {
+    if (!empModalId) return;
+    const emp = employees.find((e) => e.id === empModalId);
+    if (!confirm(`Delete ${emp ? emp.name : 'this employee'} and all their time entries?`)) return;
+    try {
+      await api('/api/admin/employees/' + empModalId, { method: 'DELETE' });
+      closeEmpModal();
+      loadEmployees();
+    } catch (e) {
+      $('empModalMsg').textContent = e.message;
+    }
+  });
+
+  $('eaMerge').addEventListener('click', () => alert('Merging employees is coming soon.'));
 
   // ---- Timesheets ----
   function buildQuery() {
