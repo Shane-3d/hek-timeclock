@@ -288,3 +288,9 @@ label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; max-width: 420px; width: 100%; }
 .modal h3 { margin-top: 0; }
 .modal .row { margin-bottom: 12px; }
+
+/* ---- Clock-in map ---- */
+#map { width: 100%; height: 65vh; min-height: 360px; background: var(--panel-2); }
+/* Keep Leaflet's popup text readable regardless of the dashboard theme. */
+.leaflet-popup-content { color: #1a1a1a; font-size: 13px; line-height: 1.4; }
+.leaflet-popup-content b { color: #000; }

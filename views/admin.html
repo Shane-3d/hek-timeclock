@@ -9,6 +9,17 @@
     <link rel="icon" type="image/png" href="/icon-192.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="HEK Admin" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -41,6 +52,7 @@
           <nav class="side-nav">
             <div class="tab active" data-tab="live">On the clock</div>
             <div class="tab" data-tab="sheets">Timesheets</div>
+            <div class="tab" data-tab="map">Map</div>
             <div class="tab" data-tab="employees">Employees</div>
           </nav>
           <button class="btn ghost sm" id="logoutBtn">Sign out</button>
@@ -84,6 +96,29 @@
               <tbody id="tsBody"></tbody>
             </table>
             <p class="status-sub" id="tsEmpty" style="display:none">No entries for this range.</p>
+          </div>
+        </section>
+
+        <!-- MAP -->
+        <section class="section" id="tab-map">
+          <div class="card" style="margin-bottom:16px">
+            <div class="row" style="align-items:center">
+              <div class="field"><label>From</label><input type="date" id="mapFrom" /></div>
+              <div class="field"><label>To</label><input type="date" id="mapTo" /></div>
+              <button class="btn gold sm" id="mapLoad">Load</button>
+              <div class="field" style="flex:1;min-width:180px">
+                <p class="status-sub" style="text-align:left;margin:0">
+                  Each pin is where an employee clocked in.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="padding:0;overflow:hidden">
+            <div id="map"></div>
+            <p class="status-sub" id="mapEmpty" style="display:none;padding:22px">
+              No clock-in locations for this range yet. A pin is saved whenever an employee
+              allows location access while clocking in.
+            </p>
           </div>
         </section>
 
