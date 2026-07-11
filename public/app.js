@@ -176,6 +176,19 @@
     actionMsg.textContent = m;
   }
 
+  // Best-effort device GPS. Resolves null (never rejects) if location is denied,
+  // unavailable, or slow — so clocking in is never blocked by location being off.
+  function getLocation() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      );
+    });
+  }
+
   actionBtn.addEventListener('click', async () => {
     actionMsg.textContent = '';
     let clockOut; // undefined = server uses now
@@ -199,7 +212,12 @@
         actionMsg.className = 'msg ok';
         actionMsg.textContent = `Clocked out at ${fmtTime(r.until)}. Have a good one!`;
       } else {
-        const r = await api('/api/clock-in', { pin });
+        const loc = await getLocation();
+        const r = await api('/api/clock-in', {
+          pin,
+          lat: loc ? loc.lat : null,
+          lng: loc ? loc.lng : null,
+        });
         actionMsg.className = 'msg ok';
         actionMsg.textContent = `Clocked in at ${fmtTime(r.since)}. Let's go!`;
       }

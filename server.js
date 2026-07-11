@@ -490,6 +490,7 @@ app.post(
     }
 
     const now = new Date();
+    const { lat, lng } = cleanLatLng(req.body?.lat, req.body?.lng);
     await store.punches.insertOne({
       _id: await store.nextId('punches'),
       employee_id: emp._id,
@@ -499,6 +500,8 @@ app.post(
       missed_reason: null,
       note: null,
       edited: false,
+      clock_in_lat: lat,
+      clock_in_lng: lng,
     });
     res.json({ name: emp.name, clockedIn: true, since: iso(now) });
   })
@@ -1146,6 +1149,36 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
+// Admin: clock-in locations (map) — every punch that captured a GPS fix, with
+// the employee's name and clock-in time. Filtered by an optional date range.
+// ---------------------------------------------------------------------------
+
+app.get(
+  '/api/admin/locations',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const q = { clock_in_lat: { $ne: null } };
+    const { from, to } = req.query;
+    if (from || to) {
+      q.clock_in = {};
+      if (from) q.clock_in.$gte = new Date(from + 'T00:00:00');
+      if (to) q.clock_in.$lte = new Date(to + 'T23:59:59.999');
+    }
+    const rows = await store.punches.find(q, { sort: { clock_in: -1 } }).toArray();
+    const named = await withNames(rows);
+    res.json(
+      named.map((p) => ({
+        id: p._id,
+        name: p.name,
+        clock_in: iso(p.clock_in),
+        lat: p.clock_in_lat,
+        lng: p.clock_in_lng,
+      }))
+    );
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Admin: timesheets
 // ---------------------------------------------------------------------------
 
@@ -1171,6 +1204,8 @@ async function timesheetRows({ employeeId, from, to }) {
     missed_reason: r.missed_reason,
     note: r.note,
     edited: r.edited,
+    clock_in_lat: r.clock_in_lat ?? null,
+    clock_in_lng: r.clock_in_lng ?? null,
   }));
 }
 

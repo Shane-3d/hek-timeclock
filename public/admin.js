@@ -550,8 +550,10 @@
     return p.toString();
   }
 
+  let tsEntries = [];
   async function loadTimesheet() {
     const data = await api('/api/admin/timesheet?' + buildQuery());
+    tsEntries = data.entries;
     $('tsTotal').textContent = data.totalHours.toFixed(2);
     $('tsEntries').textContent = data.entries.length;
     $('tsEmpty').style.display = data.entries.length ? 'none' : 'block';
@@ -665,6 +667,77 @@
     }
   });
 
+  // ---- Map (clock-in locations) ----
+  let map = null;
+  let mapMarkers = [];
+  function mapQuery() {
+    const p = new URLSearchParams();
+    if ($('mapFrom').value) p.set('from', $('mapFrom').value);
+    if ($('mapTo').value) p.set('to', $('mapTo').value);
+    return p.toString();
+  }
+  // Create the Leaflet map the first time it's needed (returns null if Leaflet
+  // couldn't load). Must run while the container is visible.
+  function ensureMap() {
+    if (map) return map;
+    if (!window.L) return null;
+    map = L.map('map').setView([43.65, -79.38], 8); // default view: southern Ontario
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors',
+    }).addTo(map);
+    return map;
+  }
+  function activateTab(name) {
+    document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+    document.querySelectorAll('.section').forEach((x) => x.classList.remove('active'));
+    const tab = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (tab) tab.classList.add('active');
+    const sec = $('tab-' + name);
+    if (sec) sec.classList.add('active');
+  }
+  async function showMap() {
+    if (!ensureMap()) return;
+    setTimeout(() => map.invalidateSize(), 0); // it was hidden until now
+    await loadMap().catch((e) => alert(e.message));
+  }
+  // Jump the map straight to one clock-in (used by the Timesheets "Location" button).
+  function focusPunch(lat, lng, name, when) {
+    activateTab('map');
+    if (!ensureMap()) return alert('Map could not load (no internet?).');
+    setTimeout(() => {
+      map.invalidateSize();
+      mapMarkers.forEach((m) => map.removeLayer(m));
+      mapMarkers = [];
+      const mk = L.circleMarker([lat, lng], {
+        radius: 9, color: '#a97f43', fillColor: '#c89b5c', fillOpacity: 0.95, weight: 2,
+      }).addTo(map);
+      mk.bindPopup(`<b>${esc(name)}</b><br>${fmtDateTime(when)}`).openPopup();
+      mapMarkers.push(mk);
+      $('mapEmpty').style.display = 'none';
+      map.setView([lat, lng], 16);
+    }, 0);
+  }
+  async function loadMap() {
+    if (!map) return;
+    const rows = await api('/api/admin/locations?' + mapQuery());
+    mapMarkers.forEach((m) => map.removeLayer(m));
+    mapMarkers = [];
+    $('mapEmpty').style.display = rows.length ? 'none' : 'block';
+    if (!rows.length) return;
+    const bounds = [];
+    rows.forEach((r) => {
+      const mk = L.circleMarker([r.lat, r.lng], {
+        radius: 8, color: '#a97f43', fillColor: '#c89b5c', fillOpacity: 0.9, weight: 2,
+      }).addTo(map);
+      mk.bindPopup(`<b>${esc(r.name)}</b><br>${fmtDateTime(r.clock_in)}`);
+      mapMarkers.push(mk);
+      bounds.push([r.lat, r.lng]);
+    });
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+  }
+  $('mapLoad').addEventListener('click', () => loadMap().catch((e) => alert(e.message)));
+
   // ---- utils ----
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
@@ -685,6 +758,8 @@
     const toStr = (d) => d.toISOString().slice(0, 10);
     $('tsFrom').value = toStr(monday);
     $('tsTo').value = toStr(now);
+    $('mapFrom').value = toStr(monday);
+    $('mapTo').value = toStr(now);
   })();
 
   api('/api/admin/me')
