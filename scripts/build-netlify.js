@@ -1,8 +1,8 @@
 // Assembles the static "dist" folder that Netlify publishes:
-//   - everything in public/  (employee clock-in page + assets)
-//   - the admin page, copied to  <ADMIN_PATH>.html  so it lives at a
-//     non-obvious URL (default /office). Netlify serves "/office" for
-//     "office.html" automatically.
+//   - everything in public/  (login/portal page, PIN clock, assets)
+//   - the admin page, copied to  <ADMIN_PATH>.html  (default /admin). Netlify
+//     serves "/admin" for "admin.html" automatically. Admins reach it by
+//     signing in on the main page, which redirects there.
 
 const fs = require('fs');
 const path = require('path');
@@ -22,10 +22,10 @@ for (const entry of fs.readdirSync(publicDir, { withFileTypes: true })) {
   }
 }
 
-// Admin page at its (obscure) path.
+// Admin page at its path (default /admin).
 const adminSlug =
-  (process.env.ADMIN_PATH || '/office').replace(/^\//, '').replace(/[^a-zA-Z0-9_-]/g, '') ||
-  'office';
+  (process.env.ADMIN_PATH || '/admin').replace(/^\//, '').replace(/[^a-zA-Z0-9_-]/g, '') ||
+  'admin';
 fs.copyFileSync(path.join(root, 'views', 'admin.html'), path.join(dist, adminSlug + '.html'));
 
 console.log(`Built dist/. Employee page at "/", admin page at "/${adminSlug}".`);
