@@ -3,6 +3,8 @@
   const $ = (id) => document.getElementById(id);
   let employees = [];
   let liveTimer = null;
+  let isDev = false; // the limited-admin "dev" account (no clock-in features)
+  let currentFeatures = null; // which paid features the dev has enabled for the client
 
   // ---- API helper ----
   async function api(path, opts = {}) {
@@ -46,15 +48,99 @@
 
   // ---- Auth ----
   function showLogin() {
-    $('app').style.display = 'none';
-    $('loginView').style.display = 'block';
     if (liveTimer) clearInterval(liveTimer);
+    // Admins sign in on the main page ("/") now — send visitors without a valid
+    // admin session there rather than showing a second login form here.
+    window.location.replace('/');
   }
   function showApp() {
     $('loginView').style.display = 'none';
     $('app').style.display = 'block';
+    loadPermissions();
     loadEmployees();
-    showLive();
+    if (isDev) applyDevRestrictions();
+    else {
+      applyEntitlements(currentFeatures);
+      showLive();
+    }
+  }
+
+  // Show/hide a sidebar tab (and drop its "active" if we're hiding it).
+  function setTabVisible(name, visible) {
+    const tab = document.querySelector('.side-nav .tab[data-tab="' + name + '"]');
+    if (tab) tab.style.display = visible ? '' : 'none';
+    if (!visible) {
+      const sec = $('tab-' + name);
+      if (sec) sec.classList.remove('active');
+    }
+  }
+
+  // For the real admin: hide any paid feature the dev has switched off.
+  function applyEntitlements(features) {
+    if (!features) return;
+    ['quotes', 'schedule', 'pricing'].forEach((key) => {
+      if (features[key] === false) setTabVisible(key, false);
+    });
+  }
+
+  // The "dev" account is a limited admin: hide the clock-in features it can't use,
+  // and reveal the "Client access" panel where it controls the client's features.
+  function applyDevRestrictions() {
+    if (liveTimer) clearInterval(liveTimer);
+    ['live', 'sheets'].forEach((t) => setTabVisible(t, false));
+    const devTab = $('devAccessTab');
+    if (devTab) devTab.style.display = '';
+    // Dev can't change the admin's own login — hide that editor.
+    ['acEmail', 'acPass', 'acSave', 'acMsg'].forEach((id) => {
+      const el = $(id);
+      if (el) el.style.display = 'none';
+    });
+    const acLabel = [...document.querySelectorAll('.menu-label')].find((l) =>
+      /admin login/i.test(l.textContent)
+    );
+    if (acLabel) acLabel.style.display = 'none';
+    // Label the signed-in account and open the first available tab.
+    const ue = $('userEmail');
+    if (ue) ue.textContent = 'dev';
+    const av = $('userAvatar');
+    if (av) av.textContent = 'D';
+    const firstTab = [...document.querySelectorAll('.side-nav .tab')].find(
+      (t) => t.style.display !== 'none'
+    );
+    if (firstTab) firstTab.click();
+  }
+
+  // ---- Client access (dev only): toggle which features the client can use ----
+  async function loadDevFeatures() {
+    const d = await api('/api/dev/features');
+    $('featMsg').textContent = '';
+    $('featureToggles').innerHTML = d.features
+      .map(
+        (f) => `<label class="feature-row">
+          <span>${esc(f.label)}</span>
+          <input type="checkbox" data-feat="${f.key}" ${f.enabled ? 'checked' : ''} />
+        </label>`
+      )
+      .join('');
+  }
+  const featEl = $('featureToggles');
+  if (featEl) {
+    featEl.addEventListener('change', async (e) => {
+      const cb = e.target.closest('input[data-feat]');
+      if (!cb) return;
+      try {
+        await api('/api/dev/features', {
+          method: 'PATCH',
+          body: JSON.stringify({ [cb.dataset.feat]: cb.checked }),
+        });
+        $('featMsg').className = 'msg ok';
+        $('featMsg').textContent = 'Saved.';
+      } catch (err) {
+        cb.checked = !cb.checked; // revert on failure
+        $('featMsg').className = 'msg err';
+        $('featMsg').textContent = err.message;
+      }
+    });
   }
 
   $('loginBtn').addEventListener('click', doLogin);
@@ -63,11 +149,14 @@
   async function doLogin() {
     $('loginMsg').textContent = '';
     try {
-      await api('/api/admin/login', {
+      const r = await api('/api/admin/login', {
         method: 'POST',
         body: JSON.stringify({ email: $('email').value, password: $('pw').value }),
       });
       $('pw').value = '';
+      isDev = !!(r && r.role === 'dev');
+      const me = await api('/api/admin/me').catch(() => ({}));
+      currentFeatures = me.features || null;
       showApp();
     } catch (e) {
       $('loginMsg').textContent = e.message;
@@ -77,6 +166,18 @@
     await api('/api/admin/logout', { method: 'POST' }).catch(() => {});
     showLogin();
   });
+
+  // ---- Mobile popout menu ----
+  function setMenu(open) {
+    $('sidebar').classList.toggle('open', open);
+    $('sidebarBackdrop').classList.toggle('open', open);
+    $('menuToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  $('menuToggle').addEventListener('click', () =>
+    setMenu(!$('sidebar').classList.contains('open'))
+  );
+  $('sidebarBackdrop').addEventListener('click', () => setMenu(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
 
   // ---- Tabs ----
   document.querySelectorAll('.tab').forEach((t) => {
@@ -88,7 +189,11 @@
       if (t.dataset.tab === 'live') showLive();
       if (t.dataset.tab === 'employees') loadEmployees();
       if (t.dataset.tab === 'sheets') loadTimesheet().catch((e) => alert(e.message));
-      if (t.dataset.tab === 'map') showMap();
+      if (t.dataset.tab === 'quotes' && window.Quotes) window.Quotes.load();
+      if (t.dataset.tab === 'schedule' && window.Schedule)
+        window.Schedule.loadAdmin().catch((e) => alert(e.message));
+      if (t.dataset.tab === 'access') loadDevFeatures().catch((e) => alert(e.message));
+      setMenu(false); // close the popout after choosing a tab
     });
   });
 
@@ -122,74 +227,319 @@
   }
 
   // ---- Employees ----
+  // Permission keys come from the server; labels are friendly names for the UI.
+  const PERM_LABELS = { quotes: 'Quotes / estimates' };
+  let permKeys = [];
+
+  async function loadPermissions() {
+    try {
+      const d = await api('/api/admin/permissions');
+      permKeys = d.permissions || [];
+    } catch (e) {
+      permKeys = [];
+    }
+    // The quick-add form was replaced by the profile editor; render only if present.
+    const np = $('newPerms');
+    if (np) renderPermChecks(np, []);
+  }
+
+  // Render permission checkboxes into a container, checking those in `selected`.
+  function renderPermChecks(container, selected) {
+    const sel = new Set(selected || []);
+    container.innerHTML = permKeys.length
+      ? permKeys
+          .map(
+            (k) =>
+              `<label class="perm"><input type="checkbox" value="${k}"${
+                sel.has(k) ? ' checked' : ''
+              } /> ${esc(PERM_LABELS[k] || k)}</label>`
+          )
+          .join('')
+      : '<span style="color:var(--muted);font-size:13px">No optional features yet.</span>';
+  }
+  const collectPerms = (container) =>
+    [...container.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
+  const permSummary = (perms) =>
+    perms && perms.length
+      ? perms.map((k) => esc(PERM_LABELS[k] || k)).join(', ')
+      : '<span style="color:var(--muted)">Hours only</span>';
+
+  // ---- Employees list: filters, sort, pagination ----
+  const EMP_PER_PAGE = 20;
+  let empSort = { key: 'first_name', dir: 1 };
+  let empPage = 1;
+
+  // Fall back to splitting the display name for records made before first/last.
+  const empFirst = (e) => e.first_name || (e.name || '').trim().split(/\s+/)[0] || '';
+  const empLast = (e) =>
+    e.last_name || (e.name || '').trim().split(/\s+/).slice(1).join(' ') || '';
+
   async function loadEmployees() {
     employees = await api('/api/admin/employees');
-    // populate selects
+    // Selects used elsewhere (timesheet filter + punch modal).
     const opts =
       '<option value="">All employees</option>' +
       employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
-    $('tsEmp').innerHTML = opts;
-    $('mEmp').innerHTML = employees
-      .map((e) => `<option value="${e.id}">${esc(e.name)}</option>`)
-      .join('');
-
-    $('empBody').innerHTML = employees
-      .map(
-        (e) => `<tr>
-          <td>${esc(e.name)}</td>
-          <td>${e.pin}</td>
-          <td>${e.active ? '<span class="badge on">Active</span>' : '<span class="badge">Inactive</span>'}</td>
-          <td style="text-align:right">
-            <button class="link-btn" data-act="pin" data-id="${e.id}">Reset PIN</button>
-            <button class="link-btn" data-act="toggle" data-id="${e.id}">${e.active ? 'Deactivate' : 'Activate'}</button>
-            <button class="link-btn danger" data-act="del" data-id="${e.id}">Delete</button>
-          </td></tr>`
-      )
-      .join('');
+    if ($('tsEmp')) $('tsEmp').innerHTML = opts;
+    if ($('mEmp'))
+      $('mEmp').innerHTML = employees
+        .map((e) => `<option value="${e.id}">${esc(e.name)}</option>`)
+        .join('');
+    // "Reports To" filter = every employee (a possible manager); keep the choice.
+    if ($('empReports')) {
+      const keep = $('empReports').value;
+      $('empReports').innerHTML =
+        '<option value="">All</option>' +
+        employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+      $('empReports').value = keep;
+    }
+    empPage = 1;
+    renderEmployees();
   }
 
-  $('empBody').addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('button');
-    if (!btn) return;
-    const id = Number(btn.dataset.id);
-    const emp = employees.find((e) => e.id === id);
-    try {
-      if (btn.dataset.act === 'del') {
-        if (!confirm(`Delete ${emp.name} and all their time entries?`)) return;
-        await api('/api/admin/employees/' + id, { method: 'DELETE' });
-      } else if (btn.dataset.act === 'toggle') {
-        await api('/api/admin/employees/' + id, {
-          method: 'PATCH',
-          body: JSON.stringify({ active: emp.active ? 0 : 1 }),
-        });
-      } else if (btn.dataset.act === 'pin') {
-        const pin = prompt(`New 4-digit PIN for ${emp.name}:`, emp.pin);
-        if (pin == null) return;
-        await api('/api/admin/employees/' + id, {
-          method: 'PATCH',
-          body: JSON.stringify({ pin: pin.trim() }),
-        });
+  function filteredEmployees() {
+    const active = $('empActive') ? $('empActive').value : 'active';
+    const type = $('empType') ? $('empType').value : '';
+    const reportsTo = $('empReports') ? $('empReports').value : '';
+    const q = ($('empSearch') ? $('empSearch').value : '').trim().toLowerCase();
+    const rows = employees.filter((e) => {
+      if (active === 'active' && !e.active) return false;
+      if (active === 'inactive' && e.active) return false;
+      if (type && (e.employment_type || '') !== type) return false;
+      if (reportsTo && String(e.reports_to || '') !== reportsTo) return false;
+      if (q) {
+        const hay = [empFirst(e), empLast(e), e.name, e.email, e.job_title]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
       }
+      return true;
+    });
+    const val = (e) => (empSort.key === 'last_name' ? empLast(e) : empFirst(e)).toLowerCase();
+    rows.sort((a, b) => (val(a) < val(b) ? -empSort.dir : val(a) > val(b) ? empSort.dir : 0));
+    return rows;
+  }
+
+  function renderEmployees() {
+    const rows = filteredEmployees();
+    const pages = Math.max(1, Math.ceil(rows.length / EMP_PER_PAGE));
+    if (empPage > pages) empPage = pages;
+    const start = (empPage - 1) * EMP_PER_PAGE;
+    const pageRows = rows.slice(start, start + EMP_PER_PAGE);
+    const dash = '<span style="color:var(--muted)">—</span>';
+
+    if ($('empEmpty')) $('empEmpty').style.display = rows.length ? 'none' : 'block';
+    $('empBody').innerHTML = pageRows
+      .map(
+        (e) => `<tr class="clickable-row" data-id="${e.id}" title="Open ${esc(e.name)}">
+          <td>${esc(empFirst(e)) || dash}${
+            e.active ? '' : ' <span class="badge">inactive</span>'
+          }</td>
+          <td>${esc(empLast(e)) || dash}</td>
+          <td>${e.job_title ? esc(e.job_title) : dash}</td>
+          <td>${dash}</td>
+        </tr>`
+      )
+      .join('');
+
+    document.querySelectorAll('.emp-table th.sortable').forEach((th) => {
+      th.classList.toggle('sort-asc', th.dataset.sort === empSort.key && empSort.dir === 1);
+      th.classList.toggle('sort-desc', th.dataset.sort === empSort.key && empSort.dir === -1);
+    });
+    renderEmpPager(pages);
+  }
+
+  function renderEmpPager(pages) {
+    const el = $('empPager');
+    if (!el) return;
+    if (pages <= 1) {
+      el.innerHTML = '';
+      return;
+    }
+    let html = `<button class="pg" data-pg="prev"${empPage === 1 ? ' disabled' : ''}>Previous</button>`;
+    for (let p = 1; p <= pages; p++)
+      html += `<button class="pg${p === empPage ? ' active' : ''}" data-pg="${p}">${p}</button>`;
+    html += `<button class="pg" data-pg="next"${empPage === pages ? ' disabled' : ''}>Next</button>`;
+    el.innerHTML = html;
+  }
+
+  // Filter / sort / pager / export / add wiring (guarded — elements may be absent).
+  ['empActive', 'empType', 'empReports'].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener('change', () => { empPage = 1; renderEmployees(); });
+  });
+  if ($('empSearch'))
+    $('empSearch').addEventListener('input', () => { empPage = 1; renderEmployees(); });
+  if ($('empReset'))
+    $('empReset').addEventListener('click', () => {
+      if ($('empActive')) $('empActive').value = 'active';
+      if ($('empType')) $('empType').value = '';
+      if ($('empSearch')) $('empSearch').value = '';
+      ['empLoc', 'empTeam', 'empGroup', 'empReports'].forEach((id) => { if ($(id)) $(id).selectedIndex = 0; });
+      empSort = { key: 'first_name', dir: 1 };
+      empPage = 1;
+      renderEmployees();
+    });
+  document.querySelectorAll('.emp-table th.sortable').forEach((th) =>
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (empSort.key === key) empSort.dir *= -1;
+      else empSort = { key, dir: 1 };
+      renderEmployees();
+    })
+  );
+  if ($('empPager'))
+    $('empPager').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-pg]');
+      if (!b || b.disabled) return;
+      const pages = Math.max(1, Math.ceil(filteredEmployees().length / EMP_PER_PAGE));
+      if (b.dataset.pg === 'prev') empPage = Math.max(1, empPage - 1);
+      else if (b.dataset.pg === 'next') empPage = Math.min(pages, empPage + 1);
+      else empPage = Number(b.dataset.pg);
+      renderEmployees();
+    });
+  if ($('empExport'))
+    $('empExport').addEventListener('click', () => {
+      const cell = (v) => {
+        const s = String(v == null ? '' : v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const lines = [['First Name', 'Last Name', 'Position', 'Email', 'PIN', 'Active'].join(',')];
+      filteredEmployees().forEach((e) =>
+        lines.push(
+          [empFirst(e), empLast(e), e.job_title || '', e.email || '', e.pin || '', e.active ? 'yes' : 'no']
+            .map(cell)
+            .join(',')
+        )
+      );
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+      a.download = 'employees.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+  // Clicking a row opens that employee's full profile editor.
+  $('empBody').addEventListener('click', (ev) => {
+    const row = ev.target.closest('tr[data-id]');
+    if (!row) return;
+    const emp = employees.find((e) => e.id === Number(row.dataset.id));
+    if (emp) openEmpModal(emp);
+  });
+
+  // "Add" opens the full profile editor in new-employee mode.
+  $('addEmp').addEventListener('click', () => openEmpModal(null));
+
+  // ---- Employee profile editor ----
+  let empModalId = null;
+  const PROFILE_FIELDS = [
+    'first_name', 'last_name', 'initials', 'phone',
+    'address1', 'address2', 'city', 'province', 'postal', 'country',
+    'birth_date', 'employment_type', 'vacation_weeks', 'job_title',
+    'start_date', 'termination_date', 'clock_in_method',
+  ];
+  // Profile field key -> the input/select element id in the editor.
+  const PF = {
+    first_name: 'peFirst', last_name: 'peLast', initials: 'peInitials', phone: 'pePhone',
+    address1: 'peAddr1', address2: 'peAddr2', city: 'peCity', province: 'peProvince',
+    postal: 'pePostal', country: 'peCountry', birth_date: 'peBirth',
+    employment_type: 'peEmpType', vacation_weeks: 'peVacation', job_title: 'peJobTitle',
+    start_date: 'peStart', termination_date: 'peTerm', clock_in_method: 'peClockMethod',
+  };
+
+  function setProfileTab(name) {
+    document.querySelectorAll('.ptab').forEach((t) => t.classList.toggle('active', t.dataset.ptab === name));
+    document.querySelectorAll('.ppanel').forEach((p) => p.classList.remove('active'));
+    const panel = $('ptab-' + name);
+    if (panel) panel.classList.add('active');
+  }
+  document.querySelectorAll('.ptab').forEach((t) =>
+    t.addEventListener('click', () => setProfileTab(t.dataset.ptab))
+  );
+
+  function openEmpModal(emp) {
+    emp = emp || null;
+    empModalId = emp ? emp.id : null;
+    $('empModalTitle').textContent = emp ? 'General — ' + emp.name : 'New employee';
+    setProfileTab('general');
+    $('peId').value = emp ? emp.id : '';
+    $('eaEmail').value = emp ? emp.email || '' : '';
+    $('eaPin').value = emp ? emp.pin || '' : '';
+    $('eaPass').value = '';
+    $('peActive').checked = emp ? !!emp.active : true;
+    PROFILE_FIELDS.forEach((k) => {
+      const el = $(PF[k]);
+      if (el) el.value = emp ? emp[k] || '' : '';
+    });
+    // Reports To: pick from every other employee (their manager).
+    const rt = $('peReportsTo');
+    if (rt) {
+      const curId = emp ? emp.id : null;
+      rt.innerHTML =
+        '<option value="">— None —</option>' +
+        employees
+          .filter((o) => o.id !== curId)
+          .map((o) => `<option value="${o.id}">${esc(o.name)}</option>`)
+          .join('');
+      rt.value = emp && emp.reports_to ? String(emp.reports_to) : '';
+    }
+    renderPermChecks($('eaPerms'), emp ? emp.permissions || [] : []);
+    // Delete / merge only make sense for an employee that already exists.
+    $('eaDelete').style.display = emp ? '' : 'none';
+    $('eaMerge').style.display = emp ? '' : 'none';
+    $('empModalMsg').textContent = '';
+    $('empModalBack').classList.add('open');
+  }
+
+  function closeEmpModal() {
+    $('empModalBack').classList.remove('open');
+  }
+  $('eaClose').addEventListener('click', closeEmpModal);
+  $('empModalBack').addEventListener('click', (e) => {
+    if (e.target === $('empModalBack')) closeEmpModal();
+  });
+
+  $('eaSave').addEventListener('click', async () => {
+    $('empModalMsg').textContent = '';
+    const payload = {
+      email: $('eaEmail').value.trim(),
+      pin: $('eaPin').value.trim(),
+      active: $('peActive').checked ? 1 : 0,
+      permissions: collectPerms($('eaPerms')),
+    };
+    PROFILE_FIELDS.forEach((k) => {
+      const el = $(PF[k]);
+      if (el) payload[k] = el.value;
+    });
+    if ($('peReportsTo')) payload.reports_to = $('peReportsTo').value;
+    if ($('eaPass').value) payload.password = $('eaPass').value;
+    try {
+      if (empModalId) {
+        await api('/api/admin/employees/' + empModalId, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        await api('/api/admin/employees', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      closeEmpModal();
       loadEmployees();
     } catch (e) {
-      alert(e.message);
+      $('empModalMsg').textContent = e.message;
     }
   });
 
-  $('addEmp').addEventListener('click', async () => {
-    $('empMsg').textContent = '';
+  $('eaDelete').addEventListener('click', async () => {
+    if (!empModalId) return;
+    const emp = employees.find((e) => e.id === empModalId);
+    if (!confirm(`Delete ${emp ? emp.name : 'this employee'} and all their time entries?`)) return;
     try {
-      await api('/api/admin/employees', {
-        method: 'POST',
-        body: JSON.stringify({ name: $('newName').value, pin: $('newPin').value }),
-      });
-      $('newName').value = '';
-      $('newPin').value = '';
+      await api('/api/admin/employees/' + empModalId, { method: 'DELETE' });
+      closeEmpModal();
       loadEmployees();
     } catch (e) {
-      $('empMsg').textContent = e.message;
+      $('empModalMsg').textContent = e.message;
     }
   });
+
+  $('eaMerge').addEventListener('click', () => alert('Merging employees is coming soon.'));
 
   // ---- Timesheets ----
   function buildQuery() {
@@ -209,7 +559,7 @@
     $('tsEmpty').style.display = data.entries.length ? 'none' : 'block';
     $('tsBody').innerHTML = data.entries
       .map(
-        (r) => `<tr>
+        (r) => `<tr class="clickable-row" data-punch="${r.id}" title="Click to edit this entry">
           <td>${esc(r.name)}${r.edited ? ' <span class="badge edited">edited</span>' : ''}</td>
           <td>${fmtDateTime(r.clock_in)}</td>
           <td>${r.clock_out ? fmtDateTime(r.clock_out) : '<span class="badge on">on the clock</span>'}</td>
@@ -219,11 +569,6 @@
               ? `<div style="font-size:12px;color:var(--red)">missed: ${esc(r.missed_reason)}</div>`
               : ''
           }</td>
-          <td style="text-align:right;white-space:nowrap">${
-            r.clock_in_lat != null && r.clock_in_lng != null
-              ? `<button class="link-btn" data-loc="${r.id}">Location</button>`
-              : ''
-          }<button class="link-btn" data-punch="${r.id}">Edit</button></td>
         </tr>`
       )
       .join('');
@@ -235,15 +580,9 @@
   });
 
   $('tsBody').addEventListener('click', (ev) => {
-    const loc = ev.target.closest('button[data-loc]');
-    if (loc) {
-      const r = tsEntries.find((x) => x.id === Number(loc.dataset.loc));
-      if (r && r.clock_in_lat != null) focusPunch(r.clock_in_lat, r.clock_in_lng, r.name, r.clock_in);
-      return;
-    }
-    const btn = ev.target.closest('button[data-punch]');
-    if (!btn) return;
-    openPunchModal(Number(btn.dataset.punch));
+    const row = ev.target.closest('tr[data-punch]');
+    if (!row) return;
+    openPunchModal(Number(row.dataset.punch));
   });
 
   // ---- Punch modal (edit + add) ----
@@ -406,6 +745,10 @@
     }[c]));
   }
 
+  // Share the auth-aware API helper (and utilities) with the Quotes module,
+  // which lives in a separate file so this one stays focused on the timeclock.
+  window.HEKAdmin = { api, esc, showLogin };
+
   // ---- boot: default date range = this week, check session ----
   (function initDates() {
     const now = new Date();
@@ -420,6 +763,11 @@
   })();
 
   api('/api/admin/me')
-    .then((d) => (d.admin ? showApp() : showLogin()))
+    .then((d) => {
+      if (!d.admin) return showLogin();
+      isDev = d.role === 'dev';
+      currentFeatures = d.features || null;
+      showApp();
+    })
     .catch(showLogin);
 })();
