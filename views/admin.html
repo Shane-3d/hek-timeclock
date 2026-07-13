@@ -53,7 +53,7 @@
     <div id="app" style="display:none">
       <!-- Mobile-only top bar: hamburger opens the popout menu -->
       <header class="mobile-bar">
-        <button class="hamburger" id="menuToggle" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+        <button class="hamburger tip" id="menuToggle" data-tip="Menu" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
           <span></span><span></span><span></span>
         </button>
         <div class="mobile-brand">HEK <small>TIMECLOCK</small></div>
@@ -66,10 +66,12 @@
           <nav class="side-nav">
             <div class="tab active" data-tab="live">On the clock</div>
             <div class="tab" data-tab="sheets">Timesheets</div>
+            <div class="tab" data-tab="map">Map</div>
             <div class="tab" data-tab="schedule">Schedule</div>
             <div class="tab" data-tab="pricing">Pricing</div>
             <div class="tab" data-tab="quotes">Quotes</div>
             <div class="tab" data-tab="employees">Employees</div>
+            <div class="tab" data-tab="tasks">My Tasks</div>
             <div class="tab" data-tab="access" id="devAccessTab" style="display:none">Client access</div>
           </nav>
 
@@ -78,9 +80,9 @@
             <div class="settings-menu" id="settingsMenu" style="display:none">
               <div class="menu-label">Theme</div>
               <div class="theme-toggle" role="group" aria-label="Color theme">
-                <button type="button" data-theme-choice="system" title="Match system" aria-label="System theme">◐</button>
-                <button type="button" data-theme-choice="light" title="Light" aria-label="Light theme">☀</button>
-                <button type="button" data-theme-choice="dark" title="Dark" aria-label="Dark theme">☾</button>
+                <button type="button" class="tip" data-tip="Match system" data-theme-choice="system" aria-label="System theme">◐</button>
+                <button type="button" class="tip" data-tip="Light" data-theme-choice="light" aria-label="Light theme">☀</button>
+                <button type="button" class="tip" data-tip="Dark" data-theme-choice="dark" aria-label="Dark theme">☾</button>
               </div>
 
               <div class="menu-label" style="margin-top:14px">Admin login</div>
@@ -98,7 +100,7 @@
                 <span class="avatar" id="userAvatar">A</span>
                 <span class="user-email" id="userEmail">admin</span>
               </div>
-              <button class="gear-btn" id="settingsGear" title="Settings" aria-label="Settings" aria-expanded="false">⚙</button>
+              <button class="gear-btn tip" id="settingsGear" data-tip="Settings" aria-label="Settings" aria-expanded="false">⚙</button>
             </div>
           </div>
         </aside>
@@ -141,6 +143,29 @@
               <tbody id="tsBody"></tbody>
             </table>
             <p class="status-sub" id="tsEmpty" style="display:none">No entries for this range.</p>
+          </div>
+        </section>
+
+        <!-- MAP -->
+        <section class="section" id="tab-map">
+          <div class="card" style="margin-bottom:16px">
+            <div class="row" style="align-items:center">
+              <div class="field"><label>From</label><input type="date" id="mapFrom" /></div>
+              <div class="field"><label>To</label><input type="date" id="mapTo" /></div>
+              <button class="btn gold sm" id="mapLoad">Load</button>
+              <div class="field" style="flex:1;min-width:180px">
+                <p class="status-sub" style="text-align:left;margin:0">
+                  Each pin is where an employee clocked in.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="padding:0;overflow:hidden">
+            <div id="map"></div>
+            <p class="status-sub" id="mapEmpty" style="display:none;padding:22px">
+              No clock-in locations for this range yet. A pin is saved whenever an employee
+              allows location access while clocking in.
+            </p>
           </div>
         </section>
 
@@ -295,7 +320,7 @@
             <div class="tb-field"><label>Reports To</label><select id="empReports"><option>All</option></select></div>
             <div class="tb-field grow"><label>Search</label><input id="empSearch" placeholder="Search..." /></div>
             <button class="btn ghost sm" id="empReset">Reset</button>
-            <button class="btn ghost sm icon-btn" id="empExport" title="Export CSV" aria-label="Export CSV">⭳</button>
+            <button class="btn ghost sm icon-btn tip" id="empExport" data-tip="Export CSV" aria-label="Export CSV">⭳</button>
             <button class="btn gold sm" id="addEmp">Add</button>
           </div>
           <div class="card emp-card">
@@ -311,6 +336,30 @@
             <p class="status-sub" id="empEmpty" style="display:none;padding:22px">No employees match these filters.</p>
           </div>
           <div class="pager" id="empPager"></div>
+        </section>
+
+        <!-- MY TASKS (kanban board) -->
+        <section class="section" id="tab-tasks">
+          <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h2 style="margin:0">My Tasks</h2>
+          </div>
+          <div class="task-toolbar">
+            <div class="tb-field grow"><label>Search</label><input id="tkSearch" placeholder="Search tasks..." /></div>
+            <div class="tb-field"><label>Group</label><select id="tkGroup"><option value="">All groups</option></select></div>
+            <div class="tb-field"><label>Assignee</label><select id="tkAssignee"><option value="">Everyone</option></select></div>
+            <div class="tb-field"><label>Priority</label>
+              <select id="tkPriority">
+                <option value="">All priorities</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select></div>
+            <div class="tb-field"><label>Label</label><select id="tkLabel"><option value="">All labels</option></select></div>
+            <button class="btn ghost sm" id="tkReset">Reset</button>
+            <div class="tk-count" id="tkCount">0 tasks</div>
+          </div>
+          <div class="task-board" id="taskBoard"></div>
         </section>
 
         <!-- CLIENT ACCESS (dev only) -->
@@ -466,10 +515,101 @@
       </div>
     </div>
 
+    <!-- Task detail (the "inside menu") -->
+    <div class="modal-back" id="taskModalBack">
+      <div class="modal task-modal">
+        <div class="tm-top">
+          <label class="tm-check"><input type="checkbox" id="tmCompleted" /> <span class="tm-id" id="tmId">TASK-0</span></label>
+          <button class="btn sm tm-timer" id="tmTimer">▶ Start</button>
+        </div>
+
+        <div class="tm-cols">
+          <div class="tm-main">
+            <input class="tm-title-input" id="tmTitle" placeholder="Task title" />
+
+            <div class="tm-h">DESCRIPTION</div>
+            <textarea class="tm-desc" id="tmDesc" rows="2" placeholder="Add a description..."></textarea>
+
+            <div class="tm-attach-head">
+              <div class="tm-h" style="margin:0">ATTACHMENTS</div>
+              <div class="tm-dropzone" id="tmDrop">
+                <input type="file" id="tmFile" multiple hidden />
+                <span class="tm-clip">📎</span> Drag &amp; drop or
+                <button type="button" class="tm-browse" id="tmBrowse">browse</button>
+                <span class="tm-attach-note">up to 4 MB each</span>
+              </div>
+            </div>
+            <div class="tm-attach-list" id="tmAttach"></div>
+
+            <div class="tm-tabs">
+              <button type="button" class="tm-tab active" data-tmtab="comments">Comments</button>
+              <button type="button" class="tm-tab" data-tmtab="time">Time</button>
+              <button type="button" class="tm-tab" data-tmtab="history">History</button>
+            </div>
+
+            <div class="tm-panel active" id="tmtab-comments">
+              <input id="tmCommentInput" placeholder="Add a comment..." />
+              <div class="tm-feed" id="tmComments"></div>
+            </div>
+            <div class="tm-panel" id="tmtab-time">
+              <div class="tm-time-total" id="tmTimeTotal">0h 00m</div>
+              <div class="tm-feed" id="tmTimeList"></div>
+            </div>
+            <div class="tm-panel" id="tmtab-history">
+              <div class="tm-feed" id="tmHistory"></div>
+            </div>
+          </div>
+
+          <aside class="tm-side">
+            <label class="tm-field"><span>STATUS</span>
+              <select id="tmStatus">
+                <option value="todo">To Do</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+              </select></label>
+            <label class="tm-field"><span>GROUP</span>
+              <input id="tmGroup" placeholder="e.g. OHD" /></label>
+            <label class="tm-field"><span>ASSIGNEE</span>
+              <select id="tmAssignee"><option value="">Unassigned</option></select></label>
+            <label class="tm-field"><span>TASK TYPE</span>
+              <select id="tmType">
+                <option>Other</option>
+                <option>Install</option>
+                <option>Repair</option>
+                <option>Delivery</option>
+                <option>Estimate</option>
+                <option>Follow-up</option>
+                <option>Office</option>
+              </select></label>
+            <label class="tm-field"><span>LABELS</span>
+              <input id="tmLabels" placeholder="comma, separated" /></label>
+            <label class="tm-field"><span>PRIORITY</span>
+              <select id="tmPriority">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select></label>
+            <label class="tm-field"><span>DUE DATE</span>
+              <input type="date" id="tmDue" /></label>
+            <label class="tm-field"><span>LINKED RECORD</span>
+              <input id="tmLinked" placeholder="Link to..." /></label>
+          </aside>
+        </div>
+
+        <div class="tm-foot">
+          <button class="btn danger-solid sm" id="tmDelete">Delete</button>
+          <div class="tm-msg" id="tmMsg"></div>
+          <button class="btn ghost sm" id="tmClose">Close</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/admin.js"></script>
     <script src="/quotes.js"></script>
     <script src="/pricing.js"></script>
     <script src="/schedule.js"></script>
+    <script src="/tasks.js"></script>
     <script src="/account.js"></script>
     <script src="/theme.js"></script>
   </body>

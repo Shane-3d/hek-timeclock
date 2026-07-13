@@ -67,7 +67,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// Raised from the 100kb default so task file attachments (sent as base64 JSON,
+// capped at 4 MB each server-side ≈ 5.4 MB encoded) fit in the request body.
+// Kept under Netlify Functions' ~6 MB request payload limit for production.
+app.use(express.json({ limit: '6mb' }));
 app.use(
   cookieSession({
     name: 'hek_sess',
@@ -102,10 +105,16 @@ app.use((req, res, next) => {
 // EXCEPT the dev, who controls it. Stored in settings doc _id:'entitlements'.
 // ---------------------------------------------------------------------------
 
+// The single source of truth for client-toggleable features. Add a feature
+// here (plus a FEATURE_MATCH entry for its endpoints, and a sidebar tab whose
+// data-tab equals the key) and it automatically shows up in the dev's "Client
+// access" panel and hides its tab for the client when switched off.
 const ADMIN_FEATURES = [
   { key: 'quotes', label: 'Quotes / estimates' },
   { key: 'schedule', label: 'Scheduling' },
   { key: 'pricing', label: 'Pricing calculator' },
+  { key: 'map', label: 'Clock-in map' },
+  { key: 'tasks', label: 'My Tasks' },
 ];
 // Which request paths belong to each feature (used to block them when disabled).
 const FEATURE_MATCH = {
@@ -115,6 +124,8 @@ const FEATURE_MATCH = {
     p === '/api/admin/geocode' ||
     p.startsWith('/api/my/schedules'),
   pricing: () => false, // client-only calculator; no endpoints to guard
+  map: (p) => p.startsWith('/api/admin/locations'),
+  tasks: (p) => p.startsWith('/api/admin/tasks'),
 };
 
 let _entitlements = null; // cached; reloaded on write and on cold start
@@ -189,7 +200,7 @@ function validEmail(e) {
 
 // The features an admin can grant an employee. "My hours" is always available
 // and is not listed here. Add new permission keys here as features are built.
-const ALL_PERMISSIONS = ['quotes'];
+const ALL_PERMISSIONS = ['quotes', 'tasks'];
 function cleanPermissions(list) {
   if (!Array.isArray(list)) return [];
   return [...new Set(list.filter((p) => ALL_PERMISSIONS.includes(p)))];
@@ -1508,6 +1519,343 @@ app.delete(
   requireQuotes,
   wrap(async (req, res) => {
     await store.quotes.deleteOne({ _id: Number(req.params.id) });
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Admin: "My Tasks" board — a kanban card assigned to a single employee.
+// Anyone with dashboard access (admin or the dev account) can create and manage
+// tasks; a task can only be assigned to an employee who holds the "tasks"
+// permission. Cards move between the To Do / In Progress / Done columns.
+// ---------------------------------------------------------------------------
+
+const TASK_STATUSES = ['todo', 'in_progress', 'done'];
+const TASK_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+
+// A short label for whoever is acting, used on comments and the history log.
+const actorName = (req) => (req.session && req.session.role === 'dev' ? 'dev' : 'admin');
+
+// The employees a task may be assigned to: active employees granted "tasks".
+async function taskAssignees() {
+  const rows = await store.employees
+    .find({ active: true, permissions: 'tasks' }, { sort: { name: 1 } })
+    .toArray();
+  return rows.map((e) => ({ id: e._id, name: e.name }));
+}
+
+// Shape a task document for the UI, resolving the assignee's name.
+function taskView(t, nameById) {
+  const time = (t.time_entries || []).reduce((s, e) => {
+    const end = e.end ? new Date(e.end) : null;
+    return s + (end ? (end - new Date(e.start)) / 1000 : 0);
+  }, 0);
+  const running = (t.time_entries || []).some((e) => !e.end);
+  return {
+    id: t._id,
+    title: t.title,
+    description: t.description || '',
+    status: TASK_STATUSES.includes(t.status) ? t.status : 'todo',
+    group: t.group || '',
+    assignee_id: t.assignee_id == null ? null : t.assignee_id,
+    assignee_name: t.assignee_id != null ? nameById[t.assignee_id] || null : null,
+    task_type: t.task_type || 'Other',
+    labels: t.labels || [],
+    priority: TASK_PRIORITIES.includes(t.priority) ? t.priority : 'low',
+    due_date: t.due_date || null,
+    linked_record: t.linked_record || null,
+    completed: !!t.completed,
+    order: t.order || 0,
+    comments: (t.comments || []).map((c) => ({ ...c, at: iso(c.at) })),
+    history: (t.history || []).map((h) => ({ ...h, at: iso(h.at) })),
+    attachments: (t.attachments || []).map((a) => ({ ...a, at: iso(a.at) })),
+    time_seconds: Math.round(time),
+    timer_running: running,
+    created_at: iso(t.created_at),
+    updated_at: iso(t.updated_at),
+  };
+}
+
+// Validate + normalize the writable fields shared by create and update. Returns
+// { set } on success or { error } when a value is invalid.
+async function readTaskFields(body, { partial } = {}) {
+  const set = {};
+  const has = (k) => body && body[k] !== undefined;
+
+  if (!partial || has('title')) {
+    const title = String((body && body.title) || '').trim();
+    if (!title) return { error: 'A task needs a title.' };
+    set.title = title.slice(0, 300);
+  }
+  if (has('description')) set.description = String(body.description || '').slice(0, 5000);
+  if (has('group')) set.group = String(body.group || '').trim().slice(0, 60);
+  if (has('task_type')) set.task_type = String(body.task_type || '').trim().slice(0, 60) || 'Other';
+  if (has('linked_record'))
+    set.linked_record = body.linked_record ? String(body.linked_record).slice(0, 200) : null;
+
+  if (has('status')) {
+    if (!TASK_STATUSES.includes(body.status)) return { error: 'Unknown status.' };
+    set.status = body.status;
+  }
+  if (has('priority')) {
+    if (!TASK_PRIORITIES.includes(body.priority)) return { error: 'Unknown priority.' };
+    set.priority = body.priority;
+  }
+  if (has('labels')) {
+    if (!Array.isArray(body.labels)) return { error: 'Labels must be a list.' };
+    set.labels = [...new Set(body.labels.map((l) => String(l).trim()).filter(Boolean))].slice(0, 20);
+  }
+  if (has('due_date')) {
+    const d = body.due_date;
+    if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return { error: 'Bad due date.' };
+    set.due_date = d || null;
+  }
+  if (has('completed')) set.completed = !!body.completed;
+  if (has('order')) set.order = Number(body.order) || 0;
+
+  if (has('assignee_id')) {
+    if (body.assignee_id == null || body.assignee_id === '') {
+      set.assignee_id = null;
+    } else {
+      const id = Number(body.assignee_id);
+      const emp = await store.employees.findOne({ _id: id, active: true });
+      if (!emp) return { error: 'That employee no longer exists.' };
+      if (!(emp.permissions || []).includes('tasks'))
+        return { error: 'That employee does not have the My Tasks permission.' };
+      set.assignee_id = id;
+    }
+  }
+  return { set };
+}
+
+app.get(
+  '/api/admin/tasks',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const rows = await store.tasks.find({}, { sort: { order: 1, _id: 1 } }).toArray();
+    const ids = [...new Set(rows.map((t) => t.assignee_id).filter((x) => x != null))];
+    const emps = ids.length ? await store.employees.find({ _id: { $in: ids } }).toArray() : [];
+    const nameById = Object.fromEntries(emps.map((e) => [e._id, e.name]));
+    res.json({
+      tasks: rows.map((t) => taskView(t, nameById)),
+      assignees: await taskAssignees(),
+    });
+  })
+);
+
+app.post(
+  '/api/admin/tasks',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const { set, error } = await readTaskFields(req.body || {}, { partial: false });
+    if (error) return res.status(400).json({ error });
+    const status = set.status || 'todo';
+    // New cards go to the top of their column.
+    const first = await store.tasks.find({ status }).sort({ order: 1 }).limit(1).toArray();
+    const doc = {
+      _id: await store.nextId('tasks'),
+      title: set.title,
+      description: set.description || '',
+      status,
+      group: set.group || '',
+      assignee_id: set.assignee_id ?? null,
+      task_type: set.task_type || 'Other',
+      labels: set.labels || [],
+      priority: set.priority || 'low',
+      due_date: set.due_date || null,
+      linked_record: set.linked_record || null,
+      completed: false,
+      order: (first[0] ? first[0].order : 0) - 1,
+      comments: [],
+      history: [{ id: 1, text: `Task created by ${actorName(req)}`, at: new Date() }],
+      time_entries: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    await store.tasks.insertOne(doc);
+    const emp = doc.assignee_id != null
+      ? await store.employees.findOne({ _id: doc.assignee_id })
+      : null;
+    res.json(taskView(doc, emp ? { [emp._id]: emp.name } : {}));
+  })
+);
+
+app.patch(
+  '/api/admin/tasks/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const existing = await store.tasks.findOne({ _id: id });
+    if (!existing) return res.status(404).json({ error: 'Task not found.' });
+    const { set, error } = await readTaskFields(req.body || {}, { partial: true });
+    if (error) return res.status(400).json({ error });
+
+    // Log meaningful changes to the history feed.
+    const log = [];
+    const who = actorName(req);
+    if (set.status && set.status !== existing.status)
+      log.push(`Moved to ${set.status.replace('_', ' ')} by ${who}`);
+    if (set.priority && set.priority !== existing.priority)
+      log.push(`Priority set to ${set.priority} by ${who}`);
+    if ('assignee_id' in set && set.assignee_id !== existing.assignee_id) {
+      const name = set.assignee_id != null
+        ? (await store.employees.findOne({ _id: set.assignee_id }))?.name || 'someone'
+        : null;
+      log.push(name ? `Assigned to ${name} by ${who}` : `Unassigned by ${who}`);
+    }
+
+    set.updated_at = new Date();
+    const update = { $set: set };
+    if (log.length) {
+      const nextId = (existing.history || []).reduce((m, h) => Math.max(m, h.id), 0) + 1;
+      update.$push = {
+        history: { $each: log.map((text, i) => ({ id: nextId + i, text, at: new Date() })) },
+      };
+    }
+    await store.tasks.updateOne({ _id: id }, update);
+    const updated = await store.tasks.findOne({ _id: id });
+    const emp = updated.assignee_id != null
+      ? await store.employees.findOne({ _id: updated.assignee_id })
+      : null;
+    res.json(taskView(updated, emp ? { [emp._id]: emp.name } : {}));
+  })
+);
+
+app.delete(
+  '/api/admin/tasks/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    await store.tasks.deleteOne({ _id: id });
+    await store.taskAttachments.deleteMany({ task_id: id }); // drop its files too
+    res.json({ ok: true });
+  })
+);
+
+app.post(
+  '/api/admin/tasks/:id/comment',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const text = String((req.body && req.body.text) || '').trim();
+    if (!text) return res.status(400).json({ error: 'Write a comment first.' });
+    const t = await store.tasks.findOne({ _id: id });
+    if (!t) return res.status(404).json({ error: 'Task not found.' });
+    const nextId = (t.comments || []).reduce((m, c) => Math.max(m, c.id), 0) + 1;
+    const comment = { id: nextId, author: actorName(req), text: text.slice(0, 2000), at: new Date() };
+    await store.tasks.updateOne(
+      { _id: id },
+      { $push: { comments: comment }, $set: { updated_at: new Date() } }
+    );
+    res.json({ ...comment, at: iso(comment.at) });
+  })
+);
+
+// Start or stop the work timer on a task. Only one entry is ever open at a time.
+app.post(
+  '/api/admin/tasks/:id/timer',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const t = await store.tasks.findOne({ _id: id });
+    if (!t) return res.status(404).json({ error: 'Task not found.' });
+    const entries = t.time_entries || [];
+    const open = entries.find((e) => !e.end);
+    if (req.body && req.body.action === 'stop') {
+      if (open) open.end = new Date();
+    } else {
+      if (!open) {
+        const nextId = entries.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+        entries.push({ id: nextId, start: new Date(), end: null });
+      }
+    }
+    await store.tasks.updateOne(
+      { _id: id },
+      { $set: { time_entries: entries, updated_at: new Date() } }
+    );
+    const emp = t.assignee_id != null ? await store.employees.findOne({ _id: t.assignee_id }) : null;
+    const updated = await store.tasks.findOne({ _id: id });
+    res.json(taskView(updated, emp ? { [emp._id]: emp.name } : {}));
+  })
+);
+
+// Task file attachments. The blob lives in its own collection; only lightweight
+// metadata is mirrored onto the task so the board lists files without the data.
+const TASK_ATTACH_MAX = 4 * 1024 * 1024; // 4 MB per file (Netlify-payload safe)
+const safeName = (s) => String(s || 'file').replace(/[\r\n"\\]/g, '').slice(0, 200) || 'file';
+
+app.post(
+  '/api/admin/tasks/:id/attachments',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const t = await store.tasks.findOne({ _id: id });
+    if (!t) return res.status(404).json({ error: 'Task not found.' });
+    const { filename, content_type, data } = req.body || {};
+    if (!data || typeof data !== 'string')
+      return res.status(400).json({ error: 'No file data received.' });
+    let buf;
+    try {
+      buf = Buffer.from(data, 'base64');
+    } catch (e) {
+      return res.status(400).json({ error: 'Could not read that file.' });
+    }
+    if (!buf.length) return res.status(400).json({ error: 'That file is empty.' });
+    if (buf.length > TASK_ATTACH_MAX)
+      return res.status(400).json({ error: 'File is too large (max 4 MB).' });
+
+    const attId = crypto.randomUUID();
+    const meta = {
+      id: attId,
+      filename: safeName(filename),
+      content_type: String(content_type || 'application/octet-stream').slice(0, 120),
+      size: buf.length,
+      uploaded_by: actorName(req),
+      at: new Date(),
+    };
+    await store.taskAttachments.insertOne({
+      _id: attId,
+      task_id: id,
+      filename: meta.filename,
+      content_type: meta.content_type,
+      data: buf,
+    });
+    await store.tasks.updateOne(
+      { _id: id },
+      { $push: { attachments: meta }, $set: { updated_at: new Date() } }
+    );
+    res.json({ ...meta, at: iso(meta.at) });
+  })
+);
+
+app.get(
+  '/api/admin/tasks/:id/attachments/:attId',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const blob = await store.taskAttachments.findOne({
+      _id: req.params.attId,
+      task_id: Number(req.params.id),
+    });
+    if (!blob) return res.status(404).json({ error: 'Attachment not found.' });
+    const raw = blob.data;
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw && raw.buffer ? raw.buffer : raw);
+    res.setHeader('Content-Type', blob.content_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${safeName(blob.filename)}"`);
+    res.send(buf);
+  })
+);
+
+app.delete(
+  '/api/admin/tasks/:id/attachments/:attId',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const attId = req.params.attId;
+    await store.taskAttachments.deleteOne({ _id: attId, task_id: id });
+    await store.tasks.updateOne(
+      { _id: id },
+      { $pull: { attachments: { id: attId } }, $set: { updated_at: new Date() } }
+    );
     res.json({ ok: true });
   })
 );

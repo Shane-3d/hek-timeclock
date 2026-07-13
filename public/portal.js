@@ -25,8 +25,19 @@
       showLogin();
       throw new Error('Please sign in.');
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Request failed.');
+    // Parse the body ourselves so a non-JSON success response (e.g. an HTML
+    // fallback page) surfaces a clear error instead of silently becoming {}
+    // and crashing later (e.g. reading .toFixed on a missing field).
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (e) {
+      data = null;
+    }
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status}).`);
+    if (data === null)
+      throw new Error('The server returned an unexpected response. Please refresh the page and sign in again.');
     return data;
   }
 
@@ -117,10 +128,11 @@
 
   async function loadMyHours() {
     const data = await api('/api/my/timesheet?' + buildQuery());
-    $('myTotal').textContent = data.totalHours.toFixed(2);
-    $('myEntries').textContent = data.entries.length;
-    $('myEmpty').style.display = data.entries.length ? 'none' : 'block';
-    $('myBody').innerHTML = data.entries
+    const entries = data.entries || [];
+    $('myTotal').textContent = (data.totalHours || 0).toFixed(2);
+    $('myEntries').textContent = entries.length;
+    $('myEmpty').style.display = entries.length ? 'none' : 'block';
+    $('myBody').innerHTML = entries
       .map(
         (r) => `<tr>
           <td>${fmtDateTime(r.clock_in)}</td>
