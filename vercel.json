@@ -1,4 +1,6 @@
 {
+  "buildCommand": "echo 'No build step on Vercel — static is served from public/, the API from api/.'",
+  "outputDirectory": "public",
   "functions": {
     "api/index.js": {
       "includeFiles": "{public,views}/**"
