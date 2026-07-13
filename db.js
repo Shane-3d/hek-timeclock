@@ -20,6 +20,7 @@ const store = {
   counters: null,
   quotes: null,
   schedules: null,
+  tasks: null,
   settings: null,
   nextId,
 };
@@ -55,6 +56,13 @@ async function doConnect() {
   store.quotes = store.db.collection('quotes');
   // Scheduled jobs: an address + description assigned to one or more employees.
   store.schedules = store.db.collection('schedules');
+  // "My Tasks" board — a kanban card assigned to a single employee, with
+  // status columns (todo / in_progress / done), comments, time, and history.
+  store.tasks = store.db.collection('tasks');
+  // File attachments for tasks. The binary blob lives here (one doc per file);
+  // lightweight metadata is mirrored onto the task doc so the board can list
+  // attachments without loading the file data.
+  store.taskAttachments = store.db.collection('task_attachments');
   // Small key/value collection for app config — currently the admin login
   // credentials (doc _id: 'admin'), seeded from env on first run.
   store.settings = store.db.collection('settings');
@@ -71,6 +79,9 @@ async function doConnect() {
   await store.quotes.createIndex({ created_at: -1 });
   await store.schedules.createIndex({ date: 1 });
   await store.schedules.createIndex({ employee_ids: 1 });
+  await store.tasks.createIndex({ status: 1, order: 1 });
+  await store.tasks.createIndex({ assignee_id: 1 });
+  await store.taskAttachments.createIndex({ task_id: 1 });
   // Auto-remove stale rate-limit records an hour after they were last touched.
   await store.rateLimits.createIndex({ windowStart: 1 }, { expireAfterSeconds: 3600 });
 }

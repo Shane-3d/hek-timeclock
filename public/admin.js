@@ -18,9 +18,35 @@
       showLogin();
       throw new Error('Please sign in.');
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Request failed.');
+    // Parse the body ourselves so a non-JSON success response (e.g. an HTML
+    // fallback page from a proxy/redirect) surfaces a clear error instead of
+    // silently becoming {} and crashing later (e.g. reading .toFixed).
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (e) {
+      data = null;
+    }
+    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status}).`);
+    if (data === null)
+      throw new Error('The server returned an unexpected response. Please refresh the page and sign in again.');
     return data;
+  }
+
+  // Fill a table body with shimmer skeleton rows while its data loads.
+  function skeletonRows(tbodyId, cols, n = 6) {
+    const body = $(tbodyId);
+    if (!body) return;
+    const widths = ['70%', '55%', '80%', '45%', '60%'];
+    let html = '';
+    for (let i = 0; i < n; i++) {
+      html += '<tr class="skel-row">';
+      for (let c = 0; c < cols; c++)
+        html += `<td><span class="skel" style="width:${widths[c % widths.length]}"></span></td>`;
+      html += '</tr>';
+    }
+    body.innerHTML = html;
   }
 
   // ---- Date helpers ----
@@ -75,10 +101,13 @@
     }
   }
 
-  // For the real admin: hide any paid feature the dev has switched off.
+  // For the real admin: hide any feature the dev has switched off. Data-driven
+  // from the server's feature list (each feature key matches a sidebar tab's
+  // data-tab), so a newly added feature is handled automatically — no need to
+  // touch this list when features are added.
   function applyEntitlements(features) {
     if (!features) return;
-    ['quotes', 'schedule', 'pricing'].forEach((key) => {
+    Object.keys(features).forEach((key) => {
       if (features[key] === false) setTabVisible(key, false);
     });
   }
@@ -189,9 +218,12 @@
       if (t.dataset.tab === 'live') showLive();
       if (t.dataset.tab === 'employees') loadEmployees();
       if (t.dataset.tab === 'sheets') loadTimesheet().catch((e) => alert(e.message));
+      if (t.dataset.tab === 'map') showMap();
       if (t.dataset.tab === 'quotes' && window.Quotes) window.Quotes.load();
       if (t.dataset.tab === 'schedule' && window.Schedule)
         window.Schedule.loadAdmin().catch((e) => alert(e.message));
+      if (t.dataset.tab === 'tasks' && window.Tasks)
+        window.Tasks.loadAdmin().catch((e) => alert(e.message));
       if (t.dataset.tab === 'access') loadDevFeatures().catch((e) => alert(e.message));
       setMenu(false); // close the popout after choosing a tab
     });
@@ -199,6 +231,8 @@
 
   // ---- Live view ----
   function showLive() {
+    // Skeleton only on the first paint (not on the 30s refresh, to avoid flicker).
+    if (!$('liveBody').children.length) skeletonRows('liveBody', 3, 3);
     refreshLive();
     if (liveTimer) clearInterval(liveTimer);
     liveTimer = setInterval(refreshLive, 30000);
@@ -228,7 +262,7 @@
 
   // ---- Employees ----
   // Permission keys come from the server; labels are friendly names for the UI.
-  const PERM_LABELS = { quotes: 'Quotes / estimates' };
+  const PERM_LABELS = { quotes: 'Quotes / estimates', tasks: 'My Tasks' };
   let permKeys = [];
 
   async function loadPermissions() {
@@ -274,9 +308,8 @@
   const empLast = (e) =>
     e.last_name || (e.name || '').trim().split(/\s+/).slice(1).join(' ') || '';
 
-  async function loadEmployees() {
-    employees = await api('/api/admin/employees');
-    // Selects used elsewhere (timesheet filter + punch modal).
+  // Selects used elsewhere (timesheet filter + punch modal) + Reports-To filter.
+  function syncEmpSelects() {
     const opts =
       '<option value="">All employees</option>' +
       employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
@@ -285,7 +318,6 @@
       $('mEmp').innerHTML = employees
         .map((e) => `<option value="${e.id}">${esc(e.name)}</option>`)
         .join('');
-    // "Reports To" filter = every employee (a possible manager); keep the choice.
     if ($('empReports')) {
       const keep = $('empReports').value;
       $('empReports').innerHTML =
@@ -293,7 +325,21 @@
         employees.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
       $('empReports').value = keep;
     }
-    empPage = 1;
+  }
+
+  async function loadEmployees() {
+    // Stale-while-revalidate: if we already have the list, paint it instantly and
+    // refresh in the background; otherwise show skeleton rows while it loads.
+    const hadData = employees.length > 0;
+    if (hadData) {
+      syncEmpSelects();
+      renderEmployees();
+    } else {
+      skeletonRows('empBody', 4);
+    }
+    employees = await api('/api/admin/employees');
+    syncEmpSelects();
+    if (!hadData) empPage = 1;
     renderEmployees();
   }
 
@@ -499,6 +545,19 @@
     if (e.target === $('empModalBack')) closeEmpModal();
   });
 
+  // Merge a save payload into a local employee object for optimistic display.
+  function applyPayloadToEmp(emp, payload) {
+    const next = { ...emp };
+    PROFILE_FIELDS.forEach((k) => { if (payload[k] != null) next[k] = payload[k]; });
+    if (payload.email != null) next.email = payload.email;
+    if (payload.pin != null) next.pin = payload.pin;
+    if (payload.active != null) next.active = !!payload.active && payload.active !== 0;
+    if (payload.reports_to != null) next.reports_to = payload.reports_to;
+    if (payload.permissions) next.permissions = payload.permissions;
+    next.name = [next.first_name, next.last_name].filter(Boolean).join(' ').trim() || next.name;
+    return next;
+  }
+
   $('eaSave').addEventListener('click', async () => {
     $('empModalMsg').textContent = '';
     const payload = {
@@ -513,12 +572,41 @@
     });
     if ($('peReportsTo')) payload.reports_to = $('peReportsTo').value;
     if ($('eaPass').value) payload.password = $('eaPass').value;
-    try {
-      if (empModalId) {
-        await api('/api/admin/employees/' + empModalId, { method: 'PATCH', body: JSON.stringify(payload) });
-      } else {
-        await api('/api/admin/employees', { method: 'POST', body: JSON.stringify(payload) });
+
+    const editingId = empModalId;
+    if (editingId) {
+      // Optimistic: update the row + close immediately, reconcile with the server.
+      const idx = employees.findIndex((e) => e.id === editingId);
+      const prev = idx >= 0 ? employees[idx] : null;
+      if (idx >= 0) {
+        employees[idx] = applyPayloadToEmp(prev, payload);
+        syncEmpSelects();
+        renderEmployees();
       }
+      closeEmpModal();
+      try {
+        const updated = await api('/api/admin/employees/' + editingId, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        if (idx >= 0 && updated && updated.id) {
+          employees[idx] = updated;
+          syncEmpSelects();
+          renderEmployees();
+        }
+      } catch (e) {
+        if (idx >= 0 && prev) {
+          employees[idx] = prev;
+          syncEmpSelects();
+          renderEmployees();
+        }
+        alert(e.message);
+      }
+      return;
+    }
+    // New employee needs a server-assigned id, so create it the normal way.
+    try {
+      await api('/api/admin/employees', { method: 'POST', body: JSON.stringify(payload) });
       closeEmpModal();
       loadEmployees();
     } catch (e) {
@@ -528,14 +616,23 @@
 
   $('eaDelete').addEventListener('click', async () => {
     if (!empModalId) return;
-    const emp = employees.find((e) => e.id === empModalId);
+    const id = empModalId;
+    const emp = employees.find((e) => e.id === id);
     if (!confirm(`Delete ${emp ? emp.name : 'this employee'} and all their time entries?`)) return;
+    // Optimistic: remove from the list right away; restore it if the server rejects.
+    const prev = employees;
+    employees = employees.filter((e) => e.id !== id);
+    syncEmpSelects();
+    renderEmployees();
+    closeEmpModal();
     try {
-      await api('/api/admin/employees/' + empModalId, { method: 'DELETE' });
-      closeEmpModal();
-      loadEmployees();
+      await api('/api/admin/employees/' + id, { method: 'DELETE' });
+      tsCache.clear(); // their punches are gone too
     } catch (e) {
-      $('empModalMsg').textContent = e.message;
+      employees = prev;
+      syncEmpSelects();
+      renderEmployees();
+      alert(e.message);
     }
   });
 
@@ -550,14 +647,13 @@
     return p.toString();
   }
 
-  let tsEntries = [];
-  async function loadTimesheet() {
-    const data = await api('/api/admin/timesheet?' + buildQuery());
-    tsEntries = data.entries;
-    $('tsTotal').textContent = data.totalHours.toFixed(2);
-    $('tsEntries').textContent = data.entries.length;
-    $('tsEmpty').style.display = data.entries.length ? 'none' : 'block';
-    $('tsBody').innerHTML = data.entries
+  const tsCache = new Map(); // query string -> last timesheet response (SWR)
+  function renderTimesheet(data) {
+    const entries = data.entries || [];
+    $('tsTotal').textContent = (data.totalHours || 0).toFixed(2);
+    $('tsEntries').textContent = entries.length;
+    $('tsEmpty').style.display = entries.length ? 'none' : 'block';
+    $('tsBody').innerHTML = entries
       .map(
         (r) => `<tr class="clickable-row" data-punch="${r.id}" title="Click to edit this entry">
           <td>${esc(r.name)}${r.edited ? ' <span class="badge edited">edited</span>' : ''}</td>
@@ -572,6 +668,15 @@
         </tr>`
       )
       .join('');
+  }
+  async function loadTimesheet() {
+    const query = buildQuery();
+    // Show the cached range instantly if we've loaded it before; else skeleton.
+    if (tsCache.has(query)) renderTimesheet(tsCache.get(query));
+    else skeletonRows('tsBody', 5);
+    const data = await api('/api/admin/timesheet?' + query);
+    tsCache.set(query, data);
+    renderTimesheet(data);
   }
 
   $('tsLoad').addEventListener('click', () => loadTimesheet().catch((e) => alert(e.message)));
@@ -590,8 +695,13 @@
   let modalRows = [];
 
   async function openPunchModal(id) {
-    // Fetch current entries to find this row (from last loaded timesheet).
-    const data = await api('/api/admin/timesheet?' + buildQuery());
+    // Reuse the cached timesheet if we have it, so the editor opens instantly.
+    const query = buildQuery();
+    let data = tsCache.get(query);
+    if (!data) {
+      data = await api('/api/admin/timesheet?' + query);
+      tsCache.set(query, data);
+    }
     modalRows = data.entries;
     const r = modalRows.find((x) => x.id === id);
     if (!r) return;
@@ -650,6 +760,7 @@
         });
       }
       $('modalBack').classList.remove('open');
+      tsCache.clear(); // entry changed — drop the cached ranges
       loadTimesheet();
     } catch (e) {
       $('modalMsg').textContent = e.message;
@@ -661,6 +772,7 @@
     try {
       await api('/api/admin/punches/' + modalPunchId, { method: 'DELETE' });
       $('modalBack').classList.remove('open');
+      tsCache.clear();
       loadTimesheet();
     } catch (e) {
       $('modalMsg').textContent = e.message;
@@ -736,7 +848,10 @@
     });
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
   }
-  $('mapLoad').addEventListener('click', () => loadMap().catch((e) => alert(e.message)));
+  // The map tab is optional markup — only wire it if it's present on the page,
+  // so a build without the map section doesn't break the whole dashboard.
+  if ($('mapLoad'))
+    $('mapLoad').addEventListener('click', () => loadMap().catch((e) => alert(e.message)));
 
   // ---- utils ----
   function esc(s) {
@@ -756,10 +871,10 @@
     const day = (now.getDay() + 6) % 7; // 0 = Monday
     monday.setDate(now.getDate() - day);
     const toStr = (d) => d.toISOString().slice(0, 10);
-    $('tsFrom').value = toStr(monday);
-    $('tsTo').value = toStr(now);
-    $('mapFrom').value = toStr(monday);
-    $('mapTo').value = toStr(now);
+    if ($('tsFrom')) $('tsFrom').value = toStr(monday);
+    if ($('tsTo')) $('tsTo').value = toStr(now);
+    if ($('mapFrom')) $('mapFrom').value = toStr(monday);
+    if ($('mapTo')) $('mapTo').value = toStr(now);
   })();
 
   api('/api/admin/me')
